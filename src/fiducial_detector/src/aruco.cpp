@@ -168,7 +168,7 @@ void FiducialDetector::fpsTimerCallback()
   auto msg = std_msgs::msg::Float32();
   msg.data = fps_monitor_.getFps();
   pub_fps_->publish(msg);
-  RCLCPP_DEBUG(get_logger(), "FPS: %.1f", msg.data);
+  RCLCPP_INFO(get_logger(), "FPS: %.1f", msg.data);
 }
 void FiducialDetector::watchdogCallback()
 {
