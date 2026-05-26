@@ -4,6 +4,13 @@
 #include "fiducial_detector/detector_parameters.hpp"
 #include "fiducial_detector/dictionary_manager.hpp"
 #include "fiducial_detector/visualization.hpp"
+#include "fiducial_detector/marker_decoder.hpp"
+#include "fiducial_detector/charuco_handler.hpp"
+#include "fiducial_detector/board_handler.hpp"
+#include "fiducial_detector/custom_dictionary.hpp"
+#include "fiducial_detector/benchmark_runner.hpp"
+#include "fiducial_detector/confidence_system.hpp"
+#include "fiducial_detector/board_generator.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -25,87 +32,111 @@
 #include <vector>
 namespace fiducial_detector {
 struct DetectedMarker {
-  int          id{-1};
-  MarkerType   type{MarkerType::UNKNOWN};
+  int id{-1};
+  MarkerType type{MarkerType::UNKNOWN};
   std::vector<cv::Point2f> corners;
-  cv::Point2f  center;
-  PoseResult   pose;
+  cv::Point2f center;
+  PoseResult  pose;
+  DetectionConfidence confidence;
 };
 struct DetectionResult {
-  std::vector<DetectedMarker>              markers;
-  std::vector<std::vector<cv::Point2f>>   rejected;
-  cv::Size                                 frame_size;
+  std::vector<DetectedMarker>           markers;
+  std::vector<std::vector<cv::Point2f>> rejected;
+  std::vector<RejectedCandidate>        rejected_with_reasons;
+  cv::Size                              frame_size;
+  CharucoResult                         charuco;
+  GridBoardResult                       board;
+  DiamondResult                         diamonds;
+  MarkerDebugImages                     debug_images;
+  bool has_debug_images{false};
 };
-class FiducialDetector : public rclcpp::Node
-{
+class FiducialDetector : public rclcpp::Node {
 public:
   explicit FiducialDetector(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
   ~FiducialDetector() override;
+  bool displayLoop();
 private:
-  void declareParameters();
-  void loadIntrinsics();
-  void initDetectors();
-  void initSubscriber();
-  void initPublishers();
+  void declareParameters(); void loadRosParams(); void loadIntrinsics();
+  void initDetectors(); void initSubscriber(); void initPublishers();
   void imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr& msg);
-  void fpsTimerCallback();
-  void watchdogCallback();
+  void fpsTimerCallback(); void watchdogCallback();
   DetectionResult runDetection(const cv::Mat& frame);
-  void detectAruco (const cv::Mat& gray, DetectionResult& result);
-  void detectCharuco(const cv::Mat& gray, const cv::Mat& color, DetectionResult& result);
-  void estimatePoses(DetectionResult& result);
-  void publishAll(const DetectionResult& result,
-                  const cv::Mat& annotated,
-                  const rclcpp::Time& stamp);
+  void detectAruco  (const cv::Mat& gray, DetectionResult& r);
+  void detectCharuco(const cv::Mat& gray, DetectionResult& r);
+  void detectBoard  (const cv::Mat& gray, DetectionResult& r);
+  void detectDiamond(const cv::Mat& gray, DetectionResult& r);
+  void estimatePoses(DetectionResult& r);
+  void computeConfidence(DetectionResult& r);
+  void renderAnnotations(cv::Mat& frame, const DetectionResult& r, bool locked);
+  void publishAll(const DetectionResult& r, const cv::Mat& ann, const rclcpp::Time& stamp);
+  void publishDebugImage(const cv::Mat& img, rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr& pub, const rclcpp::Time& stamp);
   void reconnectCamera();
-  void loadRosParams();
-  cv::Point2f computeCenter(const std::vector<cv::Point2f>& corners);
+  cv::Point2f computeCenter(const std::vector<cv::Point2f>& c);
   void enqueueDisplay(const cv::Mat& frame);
-  image_transport::Subscriber                                    image_sub_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr  pub_pose_;
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr          pub_debug_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr            pub_alignment_;
-  rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr           pub_fps_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr            pub_rejected_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr            pub_cur_dict_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr            pub_dict_score_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr            pub_det_stats_;
-  rclcpp::TimerBase::SharedPtr                                   fps_timer_;
-  rclcpp::TimerBase::SharedPtr                                   watchdog_timer_;
+  image_transport::Subscriber                                   image_sub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_pose_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr         pub_debug_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr         pub_debug_cells_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr         pub_debug_thresh_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr         pub_debug_contours_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr           pub_alignment_;
+  rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr          pub_fps_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr           pub_rejected_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr           pub_cur_dict_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr           pub_dict_score_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr           pub_det_stats_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr           pub_benchmark_;
+  rclcpp::TimerBase::SharedPtr fps_timer_, watchdog_timer_;
   double      marker_size_{0.05};
   std::string camera_topic_{"/camera/image_raw"};
   std::string dictionary_type_{"DICT_4X4_50"};
   bool        enable_charuco_{true};
+  bool        enable_gridboard_{false};
+  bool        enable_diamond_{false};
   bool        show_window_{true};
   bool        show_rejected_{true};
+  bool        show_corner_labels_{true};
+  bool        show_orientation_arrow_{true};
+  bool        show_confidence_{true};
   int         alignment_tolerance_{50};
   double      smoothing_alpha_{0.4};
   int         max_missed_frames_{5};
   DetectionMode detection_mode_{DetectionMode::SINGLE};
   std::string   detection_mode_str_{"SINGLE"};
   bool          benchmark_mode_{false};
-  cv::Ptr<cv::aruco::Dictionary>        aruco_dict_;
-  cv::Ptr<cv::aruco::CharucoBoard>      charuco_board_;
+  bool          enable_custom_dict_{false};
+  std::string   custom_dict_path_{};
+  int   charuco_cols_{7}, charuco_rows_{5};
+  float charuco_sq_{0.035f}, charuco_mk_{0.0175f};
+  int   gridboard_cols_{5}, gridboard_rows_{7};
+  float gridboard_marker_size_{0.04f}, gridboard_sep_{0.01f};
+  cv::Ptr<cv::aruco::Dictionary> aruco_dict_;
   std::unique_ptr<DetectorParametersManager> det_params_mgr_;
   std::unique_ptr<PoseEstimator>             pose_estimator_;
-  std::unique_ptr<DictionaryManager>        dict_manager_;
-  std::unique_ptr<Visualizer>               visualizer_;
-  FpsMonitor                                fps_monitor_;
-  struct CameraIntrinsics {
-    cv::Mat K;
-    cv::Mat D;
-    bool valid{false};
-  } intrinsics_;
+  std::unique_ptr<DictionaryManager>         dict_manager_;
+  std::unique_ptr<Visualizer>                visualizer_;
+  std::unique_ptr<MarkerDecoder>             marker_decoder_;
+  std::unique_ptr<CharucoHandler>            charuco_handler_;
+  std::unique_ptr<GridBoardHandler>          board_handler_;
+  std::unique_ptr<CustomDictionaryManager>   custom_dict_mgr_;
+  std::unique_ptr<BenchmarkRunner>           benchmark_runner_;
+  std::unique_ptr<ConfidenceCalculator>      confidence_calc_;
+  std::unique_ptr<BoardGenerator>            board_generator_;
+  FpsMonitor fps_monitor_;
+  struct CameraIntrinsics { cv::Mat K, D; bool valid{false}; } intrinsics_;
   std::atomic<bool> cam_connected_{false};
   std::atomic<bool> reconnect_pending_{false};
-  rclcpp::Time      last_frame_time_;
-  uint64_t          frame_count_{0};
-  std::mutex        data_mutex_;
-  cv::Mat                  display_frame_;
-  std::mutex               display_mutex_;
-  std::condition_variable  display_cv_;
-  std::atomic<bool>        display_ready_{false};
-public:
-  bool displayLoop();
+  rclcpp::Time last_frame_time_;
+  uint64_t     frame_count_{0};
+  std::atomic<bool> show_cells_window_{false};
+  std::atomic<bool> show_thresh_window_{false};
+  std::atomic<bool> show_contour_window_{false};
+  std::atomic<bool> show_rejected_window_{false};
+  std::mutex        debug_mutex_;
+  MarkerDebugImages last_debug_;
+  cv::Mat                 display_frame_;
+  std::mutex              display_mutex_;
+  std::condition_variable display_cv_;
+  std::atomic<bool>       display_ready_{false};
 };
-}
+} 

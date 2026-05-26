@@ -1,5 +1,4 @@
 #include "fiducial_detector/pose_estimator.hpp"
-#include <cmath>
 namespace fiducial_detector {
 PoseEstimator::PoseEstimator(const cv::Mat& K, const cv::Mat& D, double marker_size)
 : K_(K.clone()), D_(D.clone()), marker_size_(marker_size)

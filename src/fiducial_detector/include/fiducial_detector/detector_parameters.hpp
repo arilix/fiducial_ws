@@ -1,8 +1,9 @@
 #pragma once
+#include <opencv2/opencv.hpp>
 #include <opencv2/aruco.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <string>
 #include <map>
+#include <string>
 namespace fiducial_detector {
 inline const std::map<std::string, int> DICT_NAME_MAP = {
   {"DICT_4X4_50",          cv::aruco::DICT_4X4_50},
