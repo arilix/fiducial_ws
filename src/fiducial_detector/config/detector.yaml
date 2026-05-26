@@ -1,0 +1,104 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Fiducial Detector — Full Parameter Configuration
+# ═══════════════════════════════════════════════════════════════════════════
+
+aruco_node:
+  ros__parameters:
+
+    # ── Node settings ────────────────────────────────────────────────────────
+    marker_size: 0.05           # Physical marker side length (meters)
+    camera_topic: "/camera/image_raw"
+    dictionary_type: "DICT_4X4_50"
+    # Supported: DICT_4X4_50, DICT_4X4_100, DICT_5X5_50, DICT_6X6_250,
+    #            DICT_7X7_1000, DICT_ARUCO_ORIGINAL,
+    #            DICT_APRILTAG_16h5, DICT_APRILTAG_25h9,
+    #            DICT_APRILTAG_36h10, DICT_APRILTAG_36h11
+
+    enable_charuco: true
+    show_window: true
+    show_rejected: true
+    alignment_tolerance: 50     # Pixel radius for TARGET_LOCK
+
+    smoothing_alpha: 0.4        # EMA alpha [0=frozen, 1=raw]
+    max_missed_frames: 5
+
+    # ── Camera intrinsics ─────────────────────────────────────────────────────
+    # !! Replace with values from your camera calibration !!
+    # Run: ros2 run camera_calibration cameracalibrator --size 9x6 --square 0.025
+    camera_matrix:
+      - 640.0
+      - 0.0
+      - 320.0
+      - 0.0
+      - 640.0
+      - 240.0
+      - 0.0
+      - 0.0
+      - 1.0
+    dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # ── Adaptive Thresholding (DetectorParameters) ────────────────────────────
+    # The thresholding window is iterated from WinSizeMin to WinSizeMax in steps
+    # of WinSizeStep. Larger windows handle bigger markers and more blur.
+    adaptiveThreshWinSizeMin: 3
+    adaptiveThreshWinSizeMax: 23
+    adaptiveThreshWinSizeStep: 10
+    adaptiveThreshConstant: 7.0
+
+    # ── Contour / Candidate Filtering ─────────────────────────────────────────
+    # A marker's perimeter must be between [min,max]*max(width,height)
+    minMarkerPerimeterRate: 0.03
+    maxMarkerPerimeterRate: 4.0
+    # Polygonal approximation accuracy as fraction of perimeter
+    polygonalApproxAccuracyRate: 0.03
+    # Min distance between corners as fraction of perimeter
+    minCornerDistanceRate: 0.05
+    # Min pixel distance from image border
+    minDistanceToBorder: 3
+    # Min distance between markers
+    minMarkerDistanceRate: 0.05
+
+    # ── Perspective Removal / Bit Extraction ──────────────────────────────────
+    # Number of pixels per cell in the perspective-removed marker image
+    perspectiveRemovePixelPerCell: 8
+    # Fraction of each cell's margin to ignore (avoids edge bleed)
+    perspectiveRemoveIgnoredMarginPerCell: 0.13
+
+    # ── Marker Decoding ───────────────────────────────────────────────────────
+    # Max fraction of border bits that can be erroneous
+    maxErroneousBitsInBorderRate: 0.35
+    # Error correction rate for Hamming distance
+    errorCorrectionRate: 0.6
+    detectInvertedMarker: false
+
+    # ── Corner Refinement ─────────────────────────────────────────────────────
+    # 0=NONE, 1=SUBPIX (recommended), 2=CONTOUR, 3=APRILTAG
+    cornerRefinementMethod: 1
+    cornerRefinementWinSize: 5
+    cornerRefinementMaxIterations: 30
+    cornerRefinementMinAccuracy: 0.1
+
+    # ── Performance Profiles ──────────────────────────────────────────────────
+    # HIGH FPS MODE: comment in to trade accuracy for speed
+    # adaptiveThreshWinSizeMin: 3
+    # adaptiveThreshWinSizeMax: 7
+    # adaptiveThreshWinSizeStep: 4
+    # perspectiveRemovePixelPerCell: 4
+    # cornerRefinementMethod: 0
+
+    # JETSON MODE: lower resolution thresholding
+    # adaptiveThreshWinSizeMax: 15
+    # perspectiveRemovePixelPerCell: 6
+
+    # ── Detection mode ─────────────────────────────────────────────────────────
+    # SINGLE: use dictionary_type only (fastest)
+    # AUTO:   auto-select best dict from AUTO_SUBSET each frame
+    # MULTI:  detect with all 22 dicts simultaneously (slowest, most robust)
+    # BENCHMARK: benchmark all 22 dicts at startup
+    detection_mode: "SINGLE"
+    benchmark_on_start: false
+
+    # ── Multi-dict / auto detection subset ────────────────────────────────────
+    # Available: DICT_4X4_50, DICT_4X4_100, ... DICT_ARUCO_MIP_36h12,
+    #            DICT_APRILTAG_16h5, DICT_APRILTAG_25h9,
+    #            DICT_APRILTAG_36h10, DICT_APRILTAG_36h11
