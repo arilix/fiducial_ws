@@ -73,5 +73,25 @@ aruco_node:
     detectInvertedMarker:         false
     cornerRefinementMethod:       1   # 0=NONE 1=SUBPIX 2=CONTOUR 3=APRILTAG
     cornerRefinementWinSize:      5
-    cornerRefinementMaxIterations: 30
-    cornerRefinementMinAccuracy:   0.1
+    cornerRefinementMaxIterations: 50
+    cornerRefinementMinAccuracy:   0.01
+
+    # ── Hybrid Detector ──────────────────────────
+    use_opencv_detector:      true
+    use_native_apriltag:      true
+    use_detector_fusion:      true
+    apriltag_family:          "tag36h11"
+    apriltag_threads:         4
+    apriltag_decimate:        1.0
+    apriltag_blur:            0.0
+    apriltag_refine_edges:    true
+    apriltag_sharpening:      0.25
+    apriltag_debug:           false
+    apriltag_max_hamming:     1
+    apriltag_min_margin:      40.0
+
+    # ── Preprocessing ────────────────────────────
+    enable_clahe:             true
+    clahe_clip_limit:         2.0
+    enable_sharpen:           false
+    enable_blur:              false

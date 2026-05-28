@@ -34,8 +34,12 @@ public:
   void declareAll(rclcpp::Node* node);
   void bind(rclcpp::Node* node);
   cv::Ptr<cv::aruco::DetectorParameters> params() const { return params_; }
+  void applyDictionaryProfile(const std::string& dict_name);
   static int dictId(const std::string& name);
   static cv::Ptr<cv::aruco::Dictionary> makeDict(const std::string& name);
+  static bool isAprilTagDict(const std::string& name);
+  static bool isMIPDict(const std::string& name);
+  static int borderBitsForDict(const std::string& name);
 private:
   cv::Ptr<cv::aruco::DetectorParameters> params_;
 };

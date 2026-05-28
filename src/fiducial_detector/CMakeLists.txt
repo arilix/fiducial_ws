@@ -17,6 +17,8 @@ find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc highgui aruco calib3d)
 find_package(Eigen3 REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(APRILTAG REQUIRED apriltag)
 set(COMMON_SRCS
   src/visualization.cpp
   src/pose_estimator.cpp
@@ -30,6 +32,8 @@ set(COMMON_SRCS
   src/custom_dictionary.cpp
   src/benchmark_runner.cpp
   src/board_generator.cpp
+  src/apriltag_backend.cpp
+  src/hybrid_detector.cpp
 )
 add_executable(aruco_node
   src/main.cpp
@@ -47,6 +51,7 @@ foreach(tgt aruco_node calibration_node)
     $<INSTALL_INTERFACE:include>
     ${OpenCV_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIRS}
+    ${APRILTAG_INCLUDE_DIRS}
   )
   ament_target_dependencies(${tgt}
     rclcpp rclcpp_components
@@ -54,7 +59,7 @@ foreach(tgt aruco_node calibration_node)
     tf2 tf2_geometry_msgs
     cv_bridge image_transport
   )
-  target_link_libraries(${tgt} ${OpenCV_LIBS} Eigen3::Eigen)
+  target_link_libraries(${tgt} ${OpenCV_LIBS} Eigen3::Eigen ${APRILTAG_LIBRARIES})
 endforeach()
 install(TARGETS aruco_node calibration_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include/)

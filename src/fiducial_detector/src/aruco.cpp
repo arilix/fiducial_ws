@@ -5,6 +5,7 @@
 #include "fiducial_detector/custom_dictionary.hpp"
 #include "fiducial_detector/benchmark_runner.hpp"
 #include "fiducial_detector/board_generator.hpp"
+#include "fiducial_detector/hybrid_detector.hpp"
 #include <opencv2/imgproc.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 namespace fiducial_detector {
@@ -69,6 +70,22 @@ void FiducialDetector::declareParameters()
   declare_parameter("gridboard_rows", 7);
   declare_parameter("gridboard_marker_size", 0.04);
   declare_parameter("gridboard_sep",         0.01);
+  declare_parameter("use_opencv_detector", true);
+  declare_parameter("use_native_apriltag", true);
+  declare_parameter("use_detector_fusion", true);
+  declare_parameter("apriltag_family", "tag36h11");
+  declare_parameter("apriltag_threads", 4);
+  declare_parameter("apriltag_decimate", 1.0);
+  declare_parameter("apriltag_blur", 0.0);
+  declare_parameter("apriltag_refine_edges", true);
+  declare_parameter("apriltag_sharpening", 0.25);
+  declare_parameter("apriltag_debug", false);
+  declare_parameter("apriltag_max_hamming", 1);
+  declare_parameter("apriltag_min_margin", 40.0);
+  declare_parameter("enable_clahe", true);
+  declare_parameter("clahe_clip_limit", 2.0);
+  declare_parameter("enable_sharpen", false);
+  declare_parameter("enable_blur", false);
   det_params_mgr_ = std::make_unique<DetectorParametersManager>();
   det_params_mgr_->declareAll(this);
 }
@@ -98,6 +115,22 @@ void FiducialDetector::loadRosParams()
   gridboard_rows_        = get_parameter("gridboard_rows").as_int();
   gridboard_marker_size_ = (float)get_parameter("gridboard_marker_size").as_double();
   gridboard_sep_         = (float)get_parameter("gridboard_sep").as_double();
+  use_opencv_detector_   = get_parameter("use_opencv_detector").as_bool();
+  use_native_apriltag_   = get_parameter("use_native_apriltag").as_bool();
+  use_detector_fusion_   = get_parameter("use_detector_fusion").as_bool();
+  apriltag_family_       = get_parameter("apriltag_family").as_string();
+  apriltag_threads_      = get_parameter("apriltag_threads").as_int();
+  apriltag_decimate_     = (float)get_parameter("apriltag_decimate").as_double();
+  apriltag_blur_         = (float)get_parameter("apriltag_blur").as_double();
+  apriltag_refine_edges_ = get_parameter("apriltag_refine_edges").as_bool();
+  apriltag_sharpening_   = get_parameter("apriltag_sharpening").as_double();
+  apriltag_debug_        = get_parameter("apriltag_debug").as_bool();
+  apriltag_max_hamming_  = get_parameter("apriltag_max_hamming").as_int();
+  apriltag_min_margin_   = get_parameter("apriltag_min_margin").as_double();
+  enable_clahe_          = get_parameter("enable_clahe").as_bool();
+  clahe_clip_            = get_parameter("clahe_clip_limit").as_double();
+  enable_sharpen_        = get_parameter("enable_sharpen").as_bool();
+  enable_blur_           = get_parameter("enable_blur").as_bool();
   detection_mode_str_ = get_parameter("detection_mode").as_string();
   if      (detection_mode_str_ == "AUTO")      detection_mode_ = DetectionMode::AUTO;
   else if (detection_mode_str_ == "MULTI")     detection_mode_ = DetectionMode::MULTI;
@@ -133,6 +166,41 @@ void FiducialDetector::initDetectors()
   aruco_dict_ = dict_manager_->activeDict();
   RCLCPP_INFO(get_logger(), "ArUco dictionary: %s", dictionary_type_.c_str());
   det_params_mgr_->bind(this);
+  det_params_mgr_->applyDictionaryProfile(dictionary_type_);
+  if (dict_manager_->validateDictionary(dictionary_type_)) {
+    auto& di = dict_manager_->info(dictionary_type_);
+    RCLCPP_INFO(get_logger(),
+      "Dictionary validated: %s | markerSize=%d | markers=%d | borderBits=%d",
+      di.name.c_str(), di.marker_bits, di.total_markers, di.border_bits);
+  } else {
+    RCLCPP_WARN(get_logger(), "Dictionary validation failed: %s", dictionary_type_.c_str());
+  }
+  if (enable_clahe_) {
+    clahe_ = cv::createCLAHE(clahe_clip_, cv::Size(8, 8));
+  }
+  AprilTagConfig at_cfg;
+  at_cfg.family           = AprilTagBackend::mapDictToFamily(dictionary_type_);
+  if (at_cfg.family.empty()) at_cfg.family = apriltag_family_;
+  at_cfg.load_all_families = true;
+  at_cfg.nthreads         = apriltag_threads_;
+  at_cfg.quad_decimate    = apriltag_decimate_;
+  at_cfg.quad_sigma       = apriltag_blur_;
+  at_cfg.refine_edges     = apriltag_refine_edges_ ? 1 : 0;
+  at_cfg.decode_sharpening = apriltag_sharpening_;
+  at_cfg.debug            = apriltag_debug_ ? 1 : 0;
+  at_cfg.max_hamming      = apriltag_max_hamming_;
+  at_cfg.min_decision_margin = static_cast<float>(apriltag_min_margin_);
+  hybrid_detector_ = std::make_unique<HybridDetector>(get_logger());
+  hybrid_detector_->init(dictionary_type_, at_cfg, aruco_dict_, det_params_mgr_->params());
+  auto& atb = hybrid_detector_->apriltagBackend();
+  std::string fam_list;
+  for (const auto& f : atb.loadedFamilies()) {
+    if (!fam_list.empty()) fam_list += ", ";
+    fam_list += f;
+  }
+  RCLCPP_INFO(get_logger(),
+    "AprilTag3: %d families loaded [%s] | total_tags=%d | threads=%d",
+    atb.loadedFamilyCount(), fam_list.c_str(), atb.familyCount(), at_cfg.nthreads);
   charuco_handler_ = std::make_unique<CharucoHandler>(
     charuco_cols_, charuco_rows_, charuco_sq_, charuco_mk_, aruco_dict_);
   if (enable_gridboard_) {
@@ -149,7 +217,8 @@ void FiducialDetector::initDetectors()
     auto cdict = custom_dict_mgr_->loadYAML(custom_dict_path_);
     if (cdict) { aruco_dict_ = cdict; RCLCPP_INFO(get_logger(), "Custom dict loaded"); }
   }
-  marker_decoder_   = std::make_unique<MarkerDecoder>(aruco_dict_);
+  marker_decoder_   = std::make_unique<MarkerDecoder>(aruco_dict_,
+    8, DetectorParametersManager::borderBitsForDict(dictionary_type_));
   confidence_calc_  = std::make_unique<ConfidenceCalculator>();
   benchmark_runner_ = std::make_unique<BenchmarkRunner>();
   board_generator_  = std::make_unique<BoardGenerator>();
@@ -236,18 +305,38 @@ void FiducialDetector::watchdogCallback()
     reconnectCamera();
   }
 }
+cv::Mat FiducialDetector::preprocessFrame(const cv::Mat& gray)
+{
+  cv::Mat processed = gray;
+  if (enable_clahe_ && clahe_) {
+    cv::Mat enhanced;
+    clahe_->apply(processed, enhanced);
+    processed = enhanced;
+  }
+  if (enable_blur_) {
+    cv::GaussianBlur(processed, processed, cv::Size(3, 3), 0);
+  }
+  if (enable_sharpen_) {
+    cv::Mat blurred;
+    cv::GaussianBlur(processed, blurred, cv::Size(0, 0), 3);
+    cv::addWeighted(processed, 1.5, blurred, -0.5, 0, processed);
+  }
+  return processed;
+}
 DetectionResult FiducialDetector::runDetection(const cv::Mat& frame)
 {
   DetectionResult result;
   result.frame_size = frame.size();
   cv::Mat gray;
   cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+  gray = preprocessFrame(gray);
   switch (detection_mode_) {
     case DetectionMode::AUTO: {
       auto dp = det_params_mgr_->params();
       std::string best = dict_manager_->autoDetect(gray, dp);
       if (best != dict_manager_->activeName()) {
         RCLCPP_INFO(get_logger(), "AUTO: switched to %s", best.c_str());
+        det_params_mgr_->applyDictionaryProfile(best);
       }
       aruco_dict_ = dict_manager_->activeDict();
       detectAruco(gray, result);
@@ -284,6 +373,31 @@ DetectionResult FiducialDetector::runDetection(const cv::Mat& frame)
 }
 void FiducialDetector::detectAruco(const cv::Mat& gray, DetectionResult& result)
 {
+  if (hybrid_detector_ && use_native_apriltag_) {
+    DetectorBackend mode = DetectorBackend::AUTO;
+    if (use_detector_fusion_) mode = DetectorBackend::FUSION;
+    auto hr = hybrid_detector_->detect(gray, dictionary_type_, mode);
+    result.backend_used = hr.backend_used;
+    for (auto& hm : hr.markers) {
+      DetectedMarker m;
+      m.id              = hm.id;
+      m.type            = (hm.source == DetectorBackend::APRILTAG3) ? MarkerType::APRILTAG : MarkerType::ARUCO;
+      m.corners         = hm.corners;
+      m.center          = hm.center;
+      m.hamming         = hm.hamming;
+      m.decision_margin = hm.decision_margin;
+      m.source          = hm.source;
+      result.markers.push_back(std::move(m));
+    }
+    result.rejected.insert(result.rejected.end(), hr.rejected.begin(), hr.rejected.end());
+    if (!hr.markers.empty()) {
+      RCLCPP_INFO(get_logger(), "[%s] %s: detected=%zu | opencv=%d | apriltag=%d | lat=%.1fms",
+        dictionary_type_.c_str(),
+        HybridDetector::backendName(hr.backend_used).c_str(),
+        hr.markers.size(), hr.opencv_count, hr.apriltag_count, hr.latency_ms);
+    }
+    return;
+  }
   auto dp = det_params_mgr_->params();
   std::vector<int> ids;
   std::vector<std::vector<cv::Point2f>> corners, rejected;

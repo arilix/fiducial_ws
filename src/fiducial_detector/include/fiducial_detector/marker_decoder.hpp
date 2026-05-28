@@ -121,6 +121,7 @@ public:
     const std::vector<RejectedCandidate>& rejected) const;
   int cellPixels()  const { return cell_pixels_; }
   int borderBits()  const { return border_bits_; }
+  void updateBorderBits(int bits) { border_bits_ = bits; }
   int totalSide()   const;  
 private:
   cv::Ptr<cv::aruco::Dictionary> dict_;

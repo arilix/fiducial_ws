@@ -11,6 +11,7 @@
 #include "fiducial_detector/benchmark_runner.hpp"
 #include "fiducial_detector/confidence_system.hpp"
 #include "fiducial_detector/board_generator.hpp"
+#include "fiducial_detector/hybrid_detector.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -38,17 +39,21 @@ struct DetectedMarker {
   cv::Point2f center;
   PoseResult  pose;
   DetectionConfidence confidence;
+  int hamming{0};
+  float decision_margin{0.0f};
+  DetectorBackend source{DetectorBackend::OPENCV};
 };
 struct DetectionResult {
-  std::vector<DetectedMarker>           markers;
-  std::vector<std::vector<cv::Point2f>> rejected;
-  std::vector<RejectedCandidate>        rejected_with_reasons;
-  cv::Size                              frame_size;
-  CharucoResult                         charuco;
-  GridBoardResult                       board;
-  DiamondResult                         diamonds;
-  MarkerDebugImages                     debug_images;
+  std::vector<DetectedMarker>              markers;
+  std::vector<std::vector<cv::Point2f>>    rejected;
+  std::vector<RejectedCandidate>           rejected_with_reasons;
+  cv::Size                                 frame_size;
+  CharucoResult                            charuco;
+  GridBoardResult                          board;
+  DiamondResult                            diamonds;
+  MarkerDebugImages                        debug_images;
   bool has_debug_images{false};
+  DetectorBackend backend_used{DetectorBackend::OPENCV};
 };
 class FiducialDetector : public rclcpp::Node {
 public:
@@ -72,6 +77,7 @@ private:
   void publishDebugImage(const cv::Mat& img, rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr& pub, const rclcpp::Time& stamp);
   void reconnectCamera();
   cv::Point2f computeCenter(const std::vector<cv::Point2f>& c);
+  cv::Mat preprocessFrame(const cv::Mat& gray);
   void enqueueDisplay(const cv::Mat& frame);
   image_transport::Subscriber                                   image_sub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_pose_;
@@ -110,6 +116,22 @@ private:
   float charuco_sq_{0.035f}, charuco_mk_{0.0175f};
   int   gridboard_cols_{5}, gridboard_rows_{7};
   float gridboard_marker_size_{0.04f}, gridboard_sep_{0.01f};
+  bool        use_opencv_detector_{true};
+  bool        use_native_apriltag_{true};
+  bool        use_detector_fusion_{true};
+  std::string apriltag_family_{"tag36h11"};
+  int         apriltag_threads_{4};
+  float       apriltag_decimate_{1.0f};
+  float       apriltag_blur_{0.0f};
+  bool        apriltag_refine_edges_{true};
+  double      apriltag_sharpening_{0.25};
+  bool        apriltag_debug_{false};
+  int         apriltag_max_hamming_{1};
+  double      apriltag_min_margin_{40.0};
+  bool        enable_clahe_{true};
+  double      clahe_clip_{2.0};
+  bool        enable_sharpen_{false};
+  bool        enable_blur_{false};
   cv::Ptr<cv::aruco::Dictionary> aruco_dict_;
   std::unique_ptr<DetectorParametersManager> det_params_mgr_;
   std::unique_ptr<PoseEstimator>             pose_estimator_;
@@ -122,6 +144,8 @@ private:
   std::unique_ptr<BenchmarkRunner>           benchmark_runner_;
   std::unique_ptr<ConfidenceCalculator>      confidence_calc_;
   std::unique_ptr<BoardGenerator>            board_generator_;
+  std::unique_ptr<HybridDetector>            hybrid_detector_;
+  cv::Ptr<cv::CLAHE>                         clahe_;
   FpsMonitor fps_monitor_;
   struct CameraIntrinsics { cv::Mat K, D; bool valid{false}; } intrinsics_;
   std::atomic<bool> cam_connected_{false};
@@ -139,4 +163,4 @@ private:
   std::condition_variable display_cv_;
   std::atomic<bool>       display_ready_{false};
 };
-} 
+}
