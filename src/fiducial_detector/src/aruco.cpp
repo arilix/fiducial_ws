@@ -1,4 +1,12 @@
 #include "fiducial_detector/aruco.hpp"
+#include "fiducial_detector/marker_decoder.hpp"
+#include "fiducial_detector/charuco_handler.hpp"
+#include "fiducial_detector/board_handler.hpp"
+#include "fiducial_detector/custom_dictionary.hpp"
+#include "fiducial_detector/benchmark_runner.hpp"
+#include "fiducial_detector/board_generator.hpp"
+#include "fiducial_detector/hybrid_detector.hpp"
+#include "fiducial_detector/display_utils.hpp"
 #include <opencv2/imgproc.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 namespace fiducial_detector {
@@ -19,10 +27,18 @@ FiducialDetector::FiducialDetector(const rclcpp::NodeOptions& options)
   watchdog_timer_ = create_wall_timer(
     std::chrono::seconds(2),
     std::bind(&FiducialDetector::watchdogCallback, this));
-  RCLCPP_INFO(get_logger(), "FiducialDetector started");
+  RCLCPP_INFO(get_logger(), "═══════════════════════════════════════");
+  RCLCPP_INFO(get_logger(), " FiducialDetector — ROS 2 Humble");
+  RCLCPP_INFO(get_logger(), "═══════════════════════════════════════");
+  RCLCPP_INFO(get_logger(), "  camera_topic    : %s", camera_topic_.c_str());
+  RCLCPP_INFO(get_logger(), "  marker_size     : %.3f m", marker_size_);
+  RCLCPP_INFO(get_logger(), "  dictionary      : %s", dictionary_type_.c_str());
+  RCLCPP_INFO(get_logger(), "  enable_charuco  : %s", enable_charuco_ ? "true":"false");
+  RCLCPP_INFO(get_logger(), "  alignment_tol   : %d px", alignment_tolerance_);
 }
 FiducialDetector::~FiducialDetector()
 {
+  if (show_window_) cv::destroyAllWindows();
 }
 void FiducialDetector::declareParameters()
 {
@@ -40,26 +56,88 @@ void FiducialDetector::declareParameters()
   declare_parameter("dist_coeffs",   std::vector<double>{0,0,0,0,0});
   declare_parameter("detection_mode", "SINGLE");
   declare_parameter("benchmark_on_start", false);
+  declare_parameter("enable_gridboard", false);
+  declare_parameter("enable_diamond",   false);
+  declare_parameter("enable_custom_dict", false);
+  declare_parameter("custom_dict_path",   std::string(""));
+  declare_parameter("show_corner_labels",     true);
+  declare_parameter("show_orientation_arrow", true);
+  declare_parameter("show_confidence",        true);
+  declare_parameter("charuco_cols", 7);
+  declare_parameter("charuco_rows", 5);
+  declare_parameter("charuco_sq",   0.035);
+  declare_parameter("charuco_mk",   0.0175);
+  declare_parameter("gridboard_cols", 5);
+  declare_parameter("gridboard_rows", 7);
+  declare_parameter("gridboard_marker_size", 0.04);
+  declare_parameter("gridboard_sep",         0.01);
+  declare_parameter("use_opencv_detector", true);
+  declare_parameter("use_native_apriltag", true);
+  declare_parameter("use_detector_fusion", true);
+  declare_parameter("apriltag_family", "tag36h11");
+  declare_parameter("apriltag_threads", 4);
+  declare_parameter("apriltag_decimate", 1.0);
+  declare_parameter("apriltag_blur", 0.0);
+  declare_parameter("apriltag_refine_edges", true);
+  declare_parameter("apriltag_sharpening", 0.25);
+  declare_parameter("apriltag_debug", false);
+  declare_parameter("apriltag_max_hamming", 1);
+  declare_parameter("apriltag_min_margin", 40.0);
+  declare_parameter("enable_clahe", true);
+  declare_parameter("clahe_clip_limit", 2.0);
+  declare_parameter("enable_sharpen", false);
+  declare_parameter("enable_blur", false);
   det_params_mgr_ = std::make_unique<DetectorParametersManager>();
   det_params_mgr_->declareAll(this);
 }
 void FiducialDetector::loadRosParams()
 {
-  marker_size_         = get_parameter("marker_size").as_double();
-  camera_topic_        = get_parameter("camera_topic").as_string();
-  dictionary_type_     = get_parameter("dictionary_type").as_string();
-  enable_charuco_      = get_parameter("enable_charuco").as_bool();
-  show_window_         = get_parameter("show_window").as_bool();
-  show_rejected_       = get_parameter("show_rejected").as_bool();
-  alignment_tolerance_ = get_parameter("alignment_tolerance").as_int();
-  smoothing_alpha_     = get_parameter("smoothing_alpha").as_double();
-  max_missed_frames_   = get_parameter("max_missed_frames").as_int();
-  detection_mode_str_  = get_parameter("detection_mode").as_string();
-  benchmark_mode_      = get_parameter("benchmark_on_start").as_bool();
+  marker_size_           = get_parameter("marker_size").as_double();
+  camera_topic_          = get_parameter("camera_topic").as_string();
+  dictionary_type_       = get_parameter("dictionary_type").as_string();
+  enable_charuco_        = get_parameter("enable_charuco").as_bool();
+  show_window_           = get_parameter("show_window").as_bool();
+  show_rejected_         = get_parameter("show_rejected").as_bool();
+  alignment_tolerance_   = get_parameter("alignment_tolerance").as_int();
+  smoothing_alpha_       = get_parameter("smoothing_alpha").as_double();
+  max_missed_frames_     = get_parameter("max_missed_frames").as_int();
+  enable_gridboard_      = get_parameter("enable_gridboard").as_bool();
+  enable_diamond_        = get_parameter("enable_diamond").as_bool();
+  enable_custom_dict_    = get_parameter("enable_custom_dict").as_bool();
+  custom_dict_path_      = get_parameter("custom_dict_path").as_string();
+  show_corner_labels_    = get_parameter("show_corner_labels").as_bool();
+  show_orientation_arrow_= get_parameter("show_orientation_arrow").as_bool();
+  show_confidence_       = get_parameter("show_confidence").as_bool();
+  charuco_cols_          = get_parameter("charuco_cols").as_int();
+  charuco_rows_          = get_parameter("charuco_rows").as_int();
+  charuco_sq_            = (float)get_parameter("charuco_sq").as_double();
+  charuco_mk_            = (float)get_parameter("charuco_mk").as_double();
+  gridboard_cols_        = get_parameter("gridboard_cols").as_int();
+  gridboard_rows_        = get_parameter("gridboard_rows").as_int();
+  gridboard_marker_size_ = (float)get_parameter("gridboard_marker_size").as_double();
+  gridboard_sep_         = (float)get_parameter("gridboard_sep").as_double();
+  use_opencv_detector_   = get_parameter("use_opencv_detector").as_bool();
+  use_native_apriltag_   = get_parameter("use_native_apriltag").as_bool();
+  use_detector_fusion_   = get_parameter("use_detector_fusion").as_bool();
+  apriltag_family_       = get_parameter("apriltag_family").as_string();
+  apriltag_threads_      = get_parameter("apriltag_threads").as_int();
+  apriltag_decimate_     = (float)get_parameter("apriltag_decimate").as_double();
+  apriltag_blur_         = (float)get_parameter("apriltag_blur").as_double();
+  apriltag_refine_edges_ = get_parameter("apriltag_refine_edges").as_bool();
+  apriltag_sharpening_   = get_parameter("apriltag_sharpening").as_double();
+  apriltag_debug_        = get_parameter("apriltag_debug").as_bool();
+  apriltag_max_hamming_  = get_parameter("apriltag_max_hamming").as_int();
+  apriltag_min_margin_   = get_parameter("apriltag_min_margin").as_double();
+  enable_clahe_          = get_parameter("enable_clahe").as_bool();
+  clahe_clip_            = get_parameter("clahe_clip_limit").as_double();
+  enable_sharpen_        = get_parameter("enable_sharpen").as_bool();
+  enable_blur_           = get_parameter("enable_blur").as_bool();
+  detection_mode_str_ = get_parameter("detection_mode").as_string();
   if      (detection_mode_str_ == "AUTO")      detection_mode_ = DetectionMode::AUTO;
   else if (detection_mode_str_ == "MULTI")     detection_mode_ = DetectionMode::MULTI;
   else if (detection_mode_str_ == "BENCHMARK") detection_mode_ = DetectionMode::BENCHMARK;
   else                                         detection_mode_ = DetectionMode::SINGLE;
+  RCLCPP_INFO(get_logger(), "Detection mode: %s", detection_mode_str_.c_str());
 }
 void FiducialDetector::loadIntrinsics()
 {
@@ -89,15 +167,67 @@ void FiducialDetector::initDetectors()
   aruco_dict_ = dict_manager_->activeDict();
   RCLCPP_INFO(get_logger(), "ArUco dictionary: %s", dictionary_type_.c_str());
   det_params_mgr_->bind(this);
-  if (enable_charuco_) {
-    charuco_board_ = cv::aruco::CharucoBoard::create(
-      7, 5, 0.035f, 0.0175f, aruco_dict_);
-    RCLCPP_INFO(get_logger(), "ChArUco board initialised (7x5)");
+  det_params_mgr_->applyDictionaryProfile(dictionary_type_);
+  if (dict_manager_->validateDictionary(dictionary_type_)) {
+    auto& di = dict_manager_->info(dictionary_type_);
+    RCLCPP_INFO(get_logger(),
+      "Dictionary validated: %s | markerSize=%d | markers=%d | borderBits=%d",
+      di.name.c_str(), di.marker_bits, di.total_markers, di.border_bits);
+  } else {
+    RCLCPP_WARN(get_logger(), "Dictionary validation failed: %s", dictionary_type_.c_str());
   }
-  pose_estimator_ = std::make_unique<PoseEstimator>(
+  if (enable_clahe_) {
+    clahe_ = cv::createCLAHE(clahe_clip_, cv::Size(8, 8));
+  }
+  AprilTagConfig at_cfg;
+  at_cfg.family           = AprilTagBackend::mapDictToFamily(dictionary_type_);
+  if (at_cfg.family.empty()) at_cfg.family = apriltag_family_;
+  at_cfg.load_all_families = true;
+  at_cfg.nthreads         = apriltag_threads_;
+  at_cfg.quad_decimate    = apriltag_decimate_;
+  at_cfg.quad_sigma       = apriltag_blur_;
+  at_cfg.refine_edges     = apriltag_refine_edges_ ? 1 : 0;
+  at_cfg.decode_sharpening = apriltag_sharpening_;
+  at_cfg.debug            = apriltag_debug_ ? 1 : 0;
+  at_cfg.max_hamming      = apriltag_max_hamming_;
+  at_cfg.min_decision_margin = static_cast<float>(apriltag_min_margin_);
+  hybrid_detector_ = std::make_unique<HybridDetector>(get_logger());
+  hybrid_detector_->init(dictionary_type_, at_cfg, aruco_dict_, det_params_mgr_->params());
+  auto& atb = hybrid_detector_->apriltagBackend();
+  std::string fam_list;
+  for (const auto& f : atb.loadedFamilies()) {
+    if (!fam_list.empty()) fam_list += ", ";
+    fam_list += f;
+  }
+  RCLCPP_INFO(get_logger(),
+    "AprilTag3: %d families loaded [%s] | total_tags=%d | threads=%d",
+    atb.loadedFamilyCount(), fam_list.c_str(), atb.familyCount(), at_cfg.nthreads);
+  charuco_handler_ = std::make_unique<CharucoHandler>(
+    charuco_cols_, charuco_rows_, charuco_sq_, charuco_mk_, aruco_dict_);
+  if (enable_gridboard_) {
+    GridBoardConfig bcfg;
+    bcfg.markers_x   = gridboard_cols_;
+    bcfg.markers_y   = gridboard_rows_;
+    bcfg.marker_size = gridboard_marker_size_;
+    bcfg.marker_sep  = gridboard_sep_;
+    board_handler_ = std::make_unique<GridBoardHandler>(bcfg, aruco_dict_);
+    RCLCPP_INFO(get_logger(), "GridBoard %dx%d enabled", gridboard_cols_, gridboard_rows_);
+  }
+  if (enable_custom_dict_ && !custom_dict_path_.empty()) {
+    custom_dict_mgr_ = std::make_unique<CustomDictionaryManager>();
+    auto cdict = custom_dict_mgr_->loadYAML(custom_dict_path_);
+    if (cdict) { aruco_dict_ = cdict; RCLCPP_INFO(get_logger(), "Custom dict loaded"); }
+  }
+  marker_decoder_   = std::make_unique<MarkerDecoder>(aruco_dict_,
+    8, DetectorParametersManager::borderBitsForDict(dictionary_type_));
+  confidence_calc_  = std::make_unique<ConfidenceCalculator>();
+  benchmark_runner_ = std::make_unique<BenchmarkRunner>();
+  board_generator_  = std::make_unique<BoardGenerator>();
+  pose_estimator_   = std::make_unique<PoseEstimator>(
     intrinsics_.K, intrinsics_.D, marker_size_);
   pose_estimator_->setSmoothingAlpha(smoothing_alpha_);
   visualizer_ = std::make_unique<Visualizer>(alignment_tolerance_);
+  RCLCPP_INFO(get_logger(), "All detectors initialized");
 }
 void FiducialDetector::initPublishers()
 {
@@ -106,10 +236,7 @@ void FiducialDetector::initPublishers()
   pub_alignment_ = create_publisher<std_msgs::msg::String>("/fiducial/alignment", 10);
   pub_fps_       = create_publisher<std_msgs::msg::Float32>("/fiducial/fps", 10);
   pub_rejected_  = create_publisher<std_msgs::msg::String>("/fiducial/rejected_candidates", 10);
-  pub_cur_dict_  = create_publisher<std_msgs::msg::String>("/fiducial/current_dictionary", 10);
-  pub_dict_score_= create_publisher<std_msgs::msg::String>("/fiducial/dictionary_score", 10);
-  pub_det_stats_ = create_publisher<std_msgs::msg::String>("/fiducial/detection_stats", 10);
-  RCLCPP_INFO(get_logger(), "Publishers created on /fiducial/{{pose,debug_image,alignment,fps,rejected_candidates,current_dictionary,dictionary_score,detection_stats}}");
+  RCLCPP_INFO(get_logger(), "Publishers created on /fiducial/{{pose,debug_image,alignment,fps,rejected_candidates}}");
 }
 void FiducialDetector::initSubscriber()
 {
@@ -149,18 +276,15 @@ void FiducialDetector::imageCallback(const sensor_msgs::msg::Image::ConstSharedP
     if (m.pose.valid) {
       visualizer_->drawPoseAxis(annotated, m.pose,
         intrinsics_.K, intrinsics_.D, (float)marker_size_ * 0.6f);
-      cv::drawMarker(annotated, m.center, cv::Scalar(0, 255, 0), cv::MARKER_CROSS, 20, 2, cv::LINE_AA);
-      if (visualizer_->isAligned(m.center, result.frame_size)) {
-        any_locked = true;
-        RCLCPP_INFO(get_logger(), "Posisi Centering: (%.1f, %.1f)", m.center.x, m.center.y);
-      }
     }
+    if (visualizer_->isAligned(m.center, result.frame_size)) any_locked = true;
   }
-  visualizer_->drawUI(annotated, any_locked);
   if (show_rejected_) visualizer_->drawRejected(annotated, result.rejected);
-  if (show_window_) {
-    enqueueDisplay(annotated);
-  }
+  visualizer_->drawUI(annotated, any_locked);
+  // visualizer_->drawHUD(annotated,
+  //   fps_monitor_.getFps(), fps_monitor_.getLatencyMs(),
+  //   frame_count_, cam_connected_.load());
+  if (show_window_) enqueueDisplay(annotated);
   publishAll(result, annotated, msg->header.stamp);
 }
 void FiducialDetector::fpsTimerCallback()
@@ -168,7 +292,7 @@ void FiducialDetector::fpsTimerCallback()
   auto msg = std_msgs::msg::Float32();
   msg.data = fps_monitor_.getFps();
   pub_fps_->publish(msg);
-  RCLCPP_INFO(get_logger(), "FPS: %.1f", msg.data);
+  RCLCPP_DEBUG(get_logger(), "FPS: %.1f", msg.data);
 }
 void FiducialDetector::watchdogCallback()
 {
@@ -182,56 +306,127 @@ void FiducialDetector::watchdogCallback()
     reconnectCamera();
   }
 }
+cv::Mat FiducialDetector::preprocessFrame(const cv::Mat& gray)
+{
+  cv::Mat processed = gray;
+  if (enable_clahe_ && clahe_) {
+    cv::Mat enhanced;
+    clahe_->apply(processed, enhanced);
+    processed = enhanced;
+  }
+  if (enable_blur_) {
+    cv::GaussianBlur(processed, processed, cv::Size(3, 3), 0);
+  }
+  if (enable_sharpen_) {
+    cv::Mat blurred;
+    cv::GaussianBlur(processed, blurred, cv::Size(0, 0), 3);
+    cv::addWeighted(processed, 1.5, blurred, -0.5, 0, processed);
+  }
+  return processed;
+}
 DetectionResult FiducialDetector::runDetection(const cv::Mat& frame)
 {
   DetectionResult result;
   result.frame_size = frame.size();
   cv::Mat gray;
   cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
-  if (detection_mode_ == DetectionMode::AUTO) {
-    std::string best = dict_manager_->autoDetect(gray, det_params_mgr_->params());
-    aruco_dict_ = dict_manager_->activeDict();
-    dictionary_type_ = best;
-    RCLCPP_DEBUG(get_logger(), "AUTO: selected %s", best.c_str());
-  } else if (detection_mode_ == DetectionMode::MULTI) {
-    auto all = dict_manager_->detectAll(gray, det_params_mgr_->params());
-    for (const auto& dr : all) {
-      for (std::size_t i = 0; i < dr.ids.size(); ++i) {
-        DetectedMarker m;
-        m.id      = dr.ids[i];
-        m.type    = MarkerType::ARUCO;
-        m.corners = dr.corners[i];
-        m.center  = computeCenter(dr.corners[i]);
-        result.markers.push_back(std::move(m));
+  gray = preprocessFrame(gray);
+  switch (detection_mode_) {
+    case DetectionMode::AUTO: {
+      auto dp = det_params_mgr_->params();
+      std::string best = dict_manager_->autoDetect(gray, dp);
+      if (best != dictionary_type_) {
+        RCLCPP_INFO(get_logger(), "AUTO: switched dictionary %s → %s",
+          dictionary_type_.c_str(), best.c_str());
+        dictionary_type_ = best;
+        // ── Sync all sub-components with the new dictionary ─────────────────
+        det_params_mgr_->applyDictionaryProfile(best);
+        aruco_dict_ = dict_manager_->activeDict();
+        // 1. HybridDetector OpenCV backend
+        hybrid_detector_->setOpenCVDict(aruco_dict_);
+        // 2. MarkerDecoder border bits
+        marker_decoder_->updateBorderBits(
+          DictionaryManager::getBorderBitsForDict(best));
+        // 3. CharucoHandler (uses the same dict for board interpolation)
+        if (charuco_handler_) {
+          charuco_handler_->reconfigure(
+            charuco_cols_, charuco_rows_, charuco_sq_, charuco_mk_, aruco_dict_);
+        }
+        // 4. GridBoardHandler
+        if (board_handler_) {
+          GridBoardConfig bcfg;
+          bcfg.markers_x   = gridboard_cols_;
+          bcfg.markers_y   = gridboard_rows_;
+          bcfg.marker_size = gridboard_marker_size_;
+          bcfg.marker_sep  = gridboard_sep_;
+          board_handler_->reconfigure(bcfg, aruco_dict_);
+        }
+      } else {
+        aruco_dict_ = dict_manager_->activeDict();
       }
-      result.rejected.insert(result.rejected.end(),
-        dr.rejected.begin(), dr.rejected.end());
+      detectAruco(gray, result);
+      break;
     }
-    if (enable_charuco_) detectCharuco(gray, frame, result);
-    return result;
-  } else if (detection_mode_ == DetectionMode::BENCHMARK) {
-    dict_manager_->benchmark(gray, det_params_mgr_->params(), 10);
+    case DetectionMode::MULTI: {
+      auto dp = det_params_mgr_->params();
+      auto all_results = dict_manager_->detectAll(gray, dp);
+      for (const auto& dr : all_results) {
+        for (std::size_t i = 0; i < dr.ids.size(); ++i) {
+          DetectedMarker m;
+          m.id      = dr.ids[i];
+          m.type    = MarkerType::ARUCO;
+          m.corners = dr.corners[i];
+          m.center  = computeCenter(dr.corners[i]);
+          result.markers.push_back(std::move(m));
+        }
+        result.rejected.insert(result.rejected.end(),
+          dr.rejected.begin(), dr.rejected.end());
+      }
+      RCLCPP_DEBUG(get_logger(), "MULTI: %zu total markers from %zu dicts",
+        result.markers.size(), all_results.size());
+      break;
+    }
+    case DetectionMode::SINGLE:
+    default:
+      detectAruco(gray, result);
+      break;
   }
-  detectAruco(gray, result);
-  if (enable_charuco_) {
-    detectCharuco(gray, frame, result);
-  }
+  if (enable_charuco_) detectCharuco(gray, result);
+  if (enable_gridboard_ && board_handler_) detectBoard(gray, result);
+  if (enable_diamond_ && charuco_handler_) detectDiamond(gray, result);
   return result;
 }
 void FiducialDetector::detectAruco(const cv::Mat& gray, DetectionResult& result)
 {
+  if (hybrid_detector_ && use_native_apriltag_) {
+    DetectorBackend mode = DetectorBackend::AUTO;
+    if (use_detector_fusion_) mode = DetectorBackend::FUSION;
+    auto hr = hybrid_detector_->detect(gray, dictionary_type_, mode);
+    result.backend_used = hr.backend_used;
+    for (auto& hm : hr.markers) {
+      DetectedMarker m;
+      m.id              = hm.id;
+      m.type            = (hm.source == DetectorBackend::APRILTAG3) ? MarkerType::APRILTAG : MarkerType::ARUCO;
+      m.corners         = hm.corners;
+      m.center          = hm.center;
+      m.hamming         = hm.hamming;
+      m.decision_margin = hm.decision_margin;
+      m.source          = hm.source;
+      result.markers.push_back(std::move(m));
+    }
+    result.rejected.insert(result.rejected.end(), hr.rejected.begin(), hr.rejected.end());
+    if (!hr.markers.empty()) {
+      RCLCPP_INFO(get_logger(), "[%s] %s: detected=%zu | opencv=%d | apriltag=%d | lat=%.1fms",
+        dictionary_type_.c_str(),
+        HybridDetector::backendName(hr.backend_used).c_str(),
+        hr.markers.size(), hr.opencv_count, hr.apriltag_count, hr.latency_ms);
+    }
+    return;
+  }
   auto dp = det_params_mgr_->params();
   std::vector<int> ids;
   std::vector<std::vector<cv::Point2f>> corners, rejected;
-  cv::aruco::detectMarkers(gray, dict_manager_->activeDict(), corners, ids, dp, rejected);
-  if (!ids.empty()) {
-    cv::aruco::refineDetectedMarkers(
-      gray, charuco_board_ ? cv::Ptr<cv::aruco::Board>(charuco_board_)
-                           : cv::makePtr<cv::aruco::Board>(),
-      corners, ids, rejected,
-      intrinsics_.K, intrinsics_.D,
-      10.f, 3.f, true, cv::noArray(), dp);
-  }
+  cv::aruco::detectMarkers(gray, aruco_dict_, corners, ids, dp, rejected);
   for (std::size_t i = 0; i < ids.size(); ++i) {
     DetectedMarker m;
     m.id      = ids[i];
@@ -241,41 +436,41 @@ void FiducialDetector::detectAruco(const cv::Mat& gray, DetectionResult& result)
     result.markers.push_back(std::move(m));
   }
   result.rejected.insert(result.rejected.end(), rejected.begin(), rejected.end());
-  RCLCPP_DEBUG(get_logger(), "ArUco: %zu detected, %zu rejected",
-    ids.size(), rejected.size());
+  RCLCPP_DEBUG(get_logger(), "ArUco [%s]: %zu detected, %zu rejected",
+    dict_manager_->activeName().c_str(), ids.size(), rejected.size());
 }
 void FiducialDetector::detectCharuco(
-  const cv::Mat& gray, [[maybe_unused]] const cv::Mat& color, DetectionResult& result)
+  const cv::Mat& gray, DetectionResult& result)
 {
-  if (!charuco_board_) return;
-  std::vector<int> marker_ids;
-  std::vector<std::vector<cv::Point2f>> marker_corners;
-  cv::aruco::detectMarkers(gray, aruco_dict_, marker_corners, marker_ids,
-                           det_params_mgr_->params());
-  if (marker_ids.empty()) return;
-  std::vector<cv::Point2f> charuco_corners;
-  std::vector<int>         charuco_ids;
-  int n = cv::aruco::interpolateCornersCharuco(
-    marker_corners, marker_ids, gray, charuco_board_,
-    charuco_corners, charuco_ids,
+  if (!charuco_handler_) return;
+  auto params = det_params_mgr_->params();
+  auto cr = charuco_handler_->detect(gray, params,
     intrinsics_.K, intrinsics_.D);
-  if (n < 4) return;
-  cv::Point2f c(0,0);
-  for (const auto& p : charuco_corners) c += p;
-  c *= (1.0f / (float)charuco_corners.size());
-  auto br = cv::boundingRect(charuco_corners);
-  DetectedMarker m;
-  m.id   = 0;
-  m.type = MarkerType::CHARUCO;
-  m.corners = {
-    cv::Point2f((float)br.x,            (float)br.y),
-    cv::Point2f((float)(br.x+br.width), (float)br.y),
-    cv::Point2f((float)(br.x+br.width), (float)(br.y+br.height)),
-    cv::Point2f((float)br.x,            (float)(br.y+br.height))
-  };
-  m.center = c;
-  result.markers.push_back(std::move(m));
-  RCLCPP_DEBUG(get_logger(), "ChArUco: %d corners interpolated", n);
+  result.charuco = cr;
+  if (!cr.charuco_corners.empty()) {
+    cv::Point2f c(0,0);
+    for (auto& p:cr.charuco_corners) c+=p;
+    c *= 1.f/(float)cr.charuco_corners.size();
+    auto br = cv::boundingRect(cr.charuco_corners);
+    DetectedMarker m;
+    m.id=0; m.type=MarkerType::CHARUCO;
+    m.corners={{(float)br.x,(float)br.y},{(float)(br.x+br.width),(float)br.y},
+               {(float)(br.x+br.width),(float)(br.y+br.height)},{(float)br.x,(float)(br.y+br.height)}};
+    m.center=c; result.markers.push_back(std::move(m));
+  }
+}
+void FiducialDetector::detectBoard(const cv::Mat& gray, DetectionResult& result)
+{
+  if (!board_handler_) return;
+  auto dp = det_params_mgr_->params();
+  result.board = board_handler_->detect(gray, dp, intrinsics_.K, intrinsics_.D);
+}
+void FiducialDetector::detectDiamond(const cv::Mat& gray, DetectionResult& result)
+{
+  if (!charuco_handler_) return;
+  auto dp = det_params_mgr_->params();
+  result.diamonds = charuco_handler_->detectDiamond(
+    gray, dp, charuco_sq_, charuco_mk_, intrinsics_.K, intrinsics_.D);
 }
 void FiducialDetector::estimatePoses(DetectionResult& result)
 {
@@ -305,6 +500,7 @@ void FiducialDetector::publishAll(
       msg.data = "NO_MARKER";
     }
     pub_alignment_->publish(msg);
+    RCLCPP_INFO(get_logger(), "FPS: %.1f | Alignment: %s", fps_monitor_.getFps(), msg.data.c_str());
   }
   for (const auto& m : result.markers) {
     if (m.pose.valid) {
@@ -321,31 +517,6 @@ void FiducialDetector::publishAll(
       pub_pose_->publish(msg);
       break;
     }
-  }
-  {
-    auto msg = std_msgs::msg::String();
-    msg.data = dict_manager_->activeName();
-    pub_cur_dict_->publish(msg);
-  }
-  {
-    auto s = dict_manager_->lastScore(dict_manager_->activeName());
-    char buf[256];
-    std::snprintf(buf, sizeof(buf),
-      "{\"dict\":\"%s\",\"valid\":%d,\"rejected\":%d,\"latency_ms\":%.2f,\"score\":%.1f}",
-      s.dict_name.c_str(), s.valid_markers, s.rejected_count, s.latency_ms, s.score);
-    auto msg = std_msgs::msg::String();
-    msg.data = buf;
-    pub_dict_score_->publish(msg);
-  }
-  {
-    char buf[256];
-    std::snprintf(buf, sizeof(buf),
-      "{\"mode\":\"%s\",\"fps\":%.1f,\"markers\":%zu,\"frame\":%llu}",
-      detection_mode_str_.c_str(), fps_monitor_.getFps(),
-      result.markers.size(), (unsigned long long)frame_count_);
-    auto msg = std_msgs::msg::String();
-    msg.data = buf;
-    pub_det_stats_->publish(msg);
   }
   {
     auto msg = std_msgs::msg::String();
@@ -376,35 +547,66 @@ cv::Point2f FiducialDetector::computeCenter(const std::vector<cv::Point2f>& corn
 }
 void FiducialDetector::enqueueDisplay(const cv::Mat& frame)
 {
-  {
-    std::lock_guard<std::mutex> lk(display_mutex_);
-    display_frame_ = frame.clone();
-    display_ready_ = true;
-  }
+  { std::lock_guard<std::mutex> lk(display_mutex_); display_frame_ = frame.clone(); display_ready_ = true; }
   display_cv_.notify_one();
 }
 bool FiducialDetector::displayLoop()
 {
-  if (!show_window_) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    return rclcpp::ok();
+  if (!show_window_) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); return rclcpp::ok(); }
+  // Shared logic: wait for frame, imshow, handle ESC
+  bool ok = runDisplayLoop(display_ready_, display_mutex_, display_cv_,
+                           display_frame_, "Fiducial Detector");
+  if (!ok) return false;
+  // FiducialDetector-exclusive: debug sub-windows
+  if (show_cells_window_ || show_thresh_window_ || show_contour_window_ || show_rejected_window_) {
+    std::lock_guard<std::mutex> lk(debug_mutex_);
+    if (show_cells_window_   && last_debug_.valid && !last_debug_.cell_grid_image.empty())
+      cv::imshow("Marker Cells", last_debug_.cell_grid_image);
+    if (show_thresh_window_  && last_debug_.valid && !last_debug_.threshold_image.empty())
+      cv::imshow("Threshold",   last_debug_.threshold_image);
+    if (show_contour_window_ && last_debug_.valid && !last_debug_.contour_image.empty())
+      cv::imshow("Contours",    last_debug_.contour_image);
+    if (show_rejected_window_&& last_debug_.valid && !last_debug_.rejected_image.empty())
+      cv::imshow("Rejected",    last_debug_.rejected_image);
   }
-  cv::Mat frame_to_show;
-  {
-    std::unique_lock<std::mutex> lk(display_mutex_);
-    display_cv_.wait_for(lk, std::chrono::milliseconds(100),
-      [this]{ return display_ready_.load(); });
-    if (!display_ready_) return rclcpp::ok();
-    frame_to_show = display_frame_.clone();
-    display_ready_ = false;
-  }
-  cv::imshow("Fiducial Detector", frame_to_show);
-  int key = cv::waitKey(1);
-  if (key == 27) {
-    RCLCPP_INFO(get_logger(), "ESC pressed — shutting down");
-    rclcpp::shutdown();
-    return false;
+  // Debug window key bindings (processed after the shared waitKey(1) in runDisplayLoop)
+  // Note: runDisplayLoop already called waitKey(1); call again only if debug windows are open
+  if (show_cells_window_ || show_thresh_window_ || show_contour_window_ || show_rejected_window_) {
+    int key2 = cv::waitKey(1);
+    if      (key2 == 'd') { bool v=!show_cells_window_; show_cells_window_=v; show_thresh_window_=v; show_contour_window_=v; show_rejected_window_=v; }
+    else if (key2 == 'c') show_cells_window_    = !show_cells_window_;
+    else if (key2 == 't') show_thresh_window_   = !show_thresh_window_;
+    else if (key2 == 'n') show_contour_window_  = !show_contour_window_;
+    else if (key2 == 'r') show_rejected_window_ = !show_rejected_window_;
+  } else {
+    // Still allow toggling debug windows from the main window keypress
+    int key2 = cv::waitKey(1);
+    if      (key2 == 'd') { show_cells_window_=true; show_thresh_window_=true; show_contour_window_=true; show_rejected_window_=true; }
+    else if (key2 == 'c') show_cells_window_    = true;
+    else if (key2 == 't') show_thresh_window_   = true;
+    else if (key2 == 'n') show_contour_window_  = true;
+    else if (key2 == 'r') show_rejected_window_ = true;
   }
   return rclcpp::ok();
+}
+void FiducialDetector::publishDebugImage(
+  const cv::Mat& img,
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr& pub,
+  const rclcpp::Time& stamp)
+{
+  if (img.empty() || !pub) return;
+  cv::Mat out; if (img.channels()==1) cv::cvtColor(img,out,cv::COLOR_GRAY2BGR); else out=img;
+  auto msg = cv_bridge::CvImage(std_msgs::msg::Header(),"bgr8",out).toImageMsg();
+  msg->header.stamp=stamp; msg->header.frame_id="camera"; pub->publish(*msg);
+}
+void FiducialDetector::computeConfidence(DetectionResult& result)
+{
+  if (!confidence_calc_) return;
+  for (auto& m : result.markers) {
+    if (m.corners.size()!=4) continue;
+    m.confidence = confidence_calc_->compute(
+      m.corners, m.id, m.pose.rvec, m.pose.tvec,
+      intrinsics_.K, intrinsics_.D, 0, 4, 0, marker_size_);
+  }
 }
 }

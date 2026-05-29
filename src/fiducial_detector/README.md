@@ -1,246 +1,239 @@
-# fiducial_detector — ROS 2 Humble Multi-Marker Detection System
+# fiducial_detector — ROS 2 Humble Hybrid Multi-Marker Detection System
 
-Real-time detection of **ArUco**, **AprilTag**, **ARTag**, and **ChArUco** markers
-with 6DOF pose estimation, UI overlay, and alignment guidance.
+Real-time detection of **ArUco**, **AprilTag 3**, **ChArUco**, and **GridBoard** markers with 6DOF pose estimation, hybrid OpenCV + AprilTag3 detection, CLAHE preprocessing, and VTOL alignment guidance.
+
+> **KRTI 2026** — Precision landing on 2000×2000 mm orange waypoint with 500×500 mm ArUco marker.
 
 ---
 
 ## System Architecture
 
 ```
-[USB Webcam / ROS Camera Topic]
-         │
-         ▼  /camera/image_raw
-  ┌──────────────────────────┐
-  │  aruco_node              │
-  │  (FiducialDetector)      │
-  │  ├─ detectAruco()        │
-  │  ├─ detectARTag()        │
-  │  ├─ detectAprilTag()     │
-  │  ├─ detectCharuco()      │
-  │  ├─ estimatePose()       │
-  │  ├─ smoothMarkers()      │
-  │  ├─ drawUI()             │
-  │  └─ publishResults()     │
-  └──────────────────────────┘
-         │
-   ┌─────┼────────────────────┐
-   ▼     ▼                    ▼
-/fiducial/pose   /fiducial/debug_image
+[capture_node]  ←── USB Webcam (cv::VideoCapture / V4L2)
+      or         ←── Intel RealSense D4xx (librealsense2 SDK)
+[external topic] ←── Any ROS 2 image publisher
+        │
+        ▼  /camera/image_raw
+┌──────────────────────────────────────────┐
+│  aruco_node  (FiducialDetector)          │
+│  ├─ preprocessFrame()                    │
+│  │   ├─ CLAHE contrast enhancement       │
+│  │   ├─ Optional sharpen / blur          │
+│  ├─ HybridDetector                       │
+│  │   ├─ OpenCV ArUco backend             │
+│  │   ├─ AprilTag 3 backend (libapriltag) │
+│  │   └─ FUSION: weighted score merge     │
+│  ├─ detectCharuco() / detectBoard()      │
+│  ├─ estimatePoses() — solvePnP           │
+│  ├─ computeConfidence()                  │
+│  └─ renderAnnotations() + displayLoop()  │
+└──────────────────────────────────────────┘
+        │
+ ┌──────┼──────────────────────────────┐
+ ▼      ▼                              ▼
+/fiducial/pose    /fiducial/debug_image
 /fiducial/alignment           /fiducial/fps
 ```
 
+### Executables
+
+| Executable | Description |
+|---|---|
+| `aruco_node` | Main fiducial detection node |
+| `capture_node` | Unified C++ camera publisher (webcam + RealSense) |
+| `calibration_node` | Camera intrinsic calibration via ChArUco |
+
 ---
 
-## 1. Install Dependencies
+## Prerequisites
 
 ```bash
-# ROS 2 Humble base
-sudo apt update
+# ROS 2 Humble deps
 sudo apt install -y \
-  ros-humble-rclcpp \
-  ros-humble-sensor-msgs \
-  ros-humble-geometry-msgs \
-  ros-humble-std-msgs \
-  ros-humble-cv-bridge \
-  ros-humble-image-transport \
-  ros-humble-tf2 \
-  ros-humble-tf2-geometry-msgs \
-  ros-humble-v4l2-camera
+  ros-humble-rclcpp ros-humble-sensor-msgs \
+  ros-humble-geometry-msgs ros-humble-std-msgs \
+  ros-humble-cv-bridge ros-humble-image-transport \
+  ros-humble-tf2 ros-humble-tf2-geometry-msgs
 
-# Vision libraries
+# OpenCV + build tools
 sudo apt install -y \
-  libopencv-dev \
-  python3-opencv \
-  libeigen3-dev \
-  libapriltag-dev \
-  libapriltag3
+  libopencv-dev libeigen3-dev \
+  libapriltag-dev libapriltag3 \
+  python3-colcon-common-extensions
 
-# Build tools
-sudo apt install -y \
-  python3-colcon-common-extensions \
-  python3-rosdep
+# Intel RealSense SDK (optional — for realsense.launch.xml)
+sudo apt install -y librealsense2-dev librealsense2-udev-rules
 ```
 
 ---
 
-## 2. Workspace Setup
+## Build
+
+### Standard (webcam only)
 
 ```bash
-mkdir -p ~/fiducial_ws/src
-cp -r fiducial_detector ~/fiducial_ws/src/
-cd ~/fiducial_ws
-rosdep install --from-paths src --ignore-src -r -y
-```
-
----
-
-## 3. Build
-
-```bash
-cd ~/fiducial_ws
+cd ~/Documents/vtol/vtol\ aruco/fiducial_ws
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select fiducial_detector
+colcon build --packages-select fiducial_detector \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release
+source install/setup.bash
+```
+
+### With Intel RealSense support
+
+```bash
+colcon build --packages-select fiducial_detector \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DUSE_REALSENSE=ON
 source install/setup.bash
 ```
 
 ---
 
-## 4. Run
+## Launch Files
 
-### Option A — USB Webcam
+All launch files are pure **XML** — no Python dependency.
+
+| Launch file | Camera source | Notes |
+|---|---|---|
+| `webcam.launch.xml` | HP webcam `/dev/video6` via `capture_node` | Default |
+| `realsense.launch.xml` | Intel RealSense D4xx via librealsense2 | Requires `USE_REALSENSE=ON` |
+| `ros_topic.launch.xml` | Existing ROS image topic | No camera node started |
+| `benchmark.launch.xml` | Any topic | BENCHMARK mode |
+| `calibration.launch.xml` | Any topic | Camera intrinsic calibration |
+
+See [launch.md](launch.md) for detailed usage examples.
+
+---
+
+## Quick Start
 
 ```bash
-source ~/fiducial_ws/install/setup.bash
-ros2 launch fiducial_detector webcam.launch.py device:=/dev/video0
-```
+# USB Webcam (HP Wide Vision HD on /dev/video6)
+ros2 launch fiducial_detector webcam.launch.xml
 
-Override parameters:
-```bash
-ros2 launch fiducial_detector webcam.launch.py \
-  device:=/dev/video0 \
-  marker_size:=0.08
-```
+# Specific device
+ros2 launch fiducial_detector webcam.launch.xml device_id:=2
 
-### Option B — Existing ROS 2 Camera Topic
+# Intel RealSense (build with USE_REALSENSE=ON first)
+ros2 launch fiducial_detector realsense.launch.xml
 
-```bash
-ros2 launch fiducial_detector ros_topic.launch.py \
-  camera_topic:=/camera/color/image_raw \
-  marker_size:=0.05
-```
+# From existing ROS topic
+ros2 launch fiducial_detector ros_topic.launch.xml \
+  camera_topic:=/camera/color/image_raw
 
-### Option C — Direct run (no launch)
-
-```bash
-ros2 run fiducial_detector aruco_node \
-  --ros-args -p camera_topic:=/camera/image_raw -p marker_size:=0.05
+# AUTO dictionary detection (KRTI 2026 recommended)
+ros2 launch fiducial_detector webcam.launch.xml \
+  detection_mode:=AUTO \
+  marker_size:=0.5
 ```
 
 ---
 
-## 5. Published Topics
+## Supported Dictionaries
 
-| Topic                   | Type                         | Description            |
-|-------------------------|------------------------------|------------------------|
-| `/fiducial/pose`        | geometry_msgs/PoseStamped    | 6DOF pose of marker[0] |
-| `/fiducial/debug_image` | sensor_msgs/Image            | Annotated frame        |
-| `/fiducial/alignment`   | std_msgs/String              | Alignment status string |
-| `/fiducial/fps`         | std_msgs/Float32             | Current FPS (1 Hz pub) |
+### OpenCV ArUco
 
-Alignment values: `NO_MARKER`, `TARGET_LOCK`, `GESER_KIRI`, `GESER_KANAN`,
-`NAIK`, `TURUN`, combinations like `GESER_KIRI|NAIK`, etc.
+| Dictionary | Bits | Markers |
+|---|---|---|
+| `DICT_4X4_50` / `100` / `250` / `1000` | 4×4 | 50–1000 |
+| `DICT_5X5_50` — `DICT_5X5_1000` | 5×5 | 50–1000 |
+| `DICT_6X6_50` — `DICT_6X6_1000` | 6×6 | 50–1000 |
+| `DICT_7X7_50` — `DICT_7X7_1000` | 7×7 | 50–1000 |
+| `DICT_ARUCO_ORIGINAL` | 5×5 | 1024 |
 
----
+### AprilTag (via native AprilTag 3 backend)
 
-## 6. ROS 2 Parameters
+| Dictionary | Family | Markers |
+|---|---|---|
+| `DICT_APRILTAG_16h5` | tag16h5 | 30 |
+| `DICT_APRILTAG_25h9` | tag25h9 | 35 |
+| `DICT_APRILTAG_36h10` | tag36h10 | 2320 |
+| `DICT_APRILTAG_36h11` | tag36h11 | 587 |
 
-| Parameter             | Type    | Default            | Description                          |
-|-----------------------|---------|--------------------|--------------------------------------|
-| `marker_size`         | double  | `0.05`             | Physical side length (meters)        |
-| `camera_topic`        | string  | `/camera/image_raw`| Camera topic                         |
-| `dictionary_type`     | string  | `DICT_4X4_50`      | ArUco dictionary                     |
-| `enable_apriltag`     | bool    | `true`             | Enable AprilTag detection            |
-| `enable_charuco`      | bool    | `true`             | Enable ChArUco detection             |
-| `alignment_tolerance` | int     | `50`               | Pixel tolerance for TARGET_LOCK      |
-| `smoothing_alpha`     | double  | `0.4`              | EMA alpha (0=no update, 1=raw)       |
-| `max_missed_frames`   | int     | `5`                | Frames before dropping a track       |
-| `show_window`         | bool    | `true`             | Show OpenCV window                   |
-| `camera_matrix`       | double[]| identity           | 3x3 camera matrix (row-major)        |
-| `dist_coeffs`         | double[]| zeros              | Distortion coefficients              |
+### AUTO Mode Subset (KRTI 2026)
+
+AUTO mode tries these dictionaries automatically:
+`DICT_4X4_50`, `DICT_4X4_100`, `DICT_5X5_50`, `DICT_5X5_100`, `DICT_6X6_50`, `DICT_6X6_100`, `DICT_6X6_250`, `DICT_APRILTAG_36h11`
 
 ---
 
-## 7. Generate ArUco Markers
+## ROS 2 Parameters
 
-```python
-import cv2
+### Core
 
-dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `camera_topic` | string | `/camera/image_raw` | Input image topic |
+| `marker_size` | double | `0.05` | Physical side length (metres) |
+| `dictionary_type` | string | `DICT_4X4_50` | Dictionary name or `AUTO` |
+| `detection_mode` | string | `SINGLE` | `SINGLE`/`AUTO`/`MULTI`/`BENCHMARK` |
+| `show_window` | bool | `true` | OpenCV GUI window |
+| `alignment_tolerance` | int | `50` | Pixel tolerance for centering |
 
-for marker_id in range(5):
-    img = cv2.aruco.generateImageMarker(dictionary, marker_id, 300)
-    cv2.imwrite(f"aruco_{marker_id}.png", img)
-    print(f"Saved aruco_{marker_id}.png")
-```
+### Hybrid Detector
 
-Print at 50mm x 50mm for `marker_size=0.05`.
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `use_opencv_detector` | bool | `true` | OpenCV ArUco backend |
+| `use_native_apriltag` | bool | `true` | Native AprilTag 3 backend |
+| `use_detector_fusion` | bool | `true` | Dual-backend fusion scoring |
+| `apriltag_threads` | int | `4` | AprilTag decoder threads |
+| `apriltag_decimate` | float | `1.0` | Quad decimation (1=full res) |
+| `apriltag_sharpening` | double | `0.25` | Decode sharpening |
+| `apriltag_max_hamming` | int | `1` | Max Hamming distance |
+| `apriltag_min_margin` | double | `40.0` | Min decision margin (anti-ghost) |
 
----
+### Preprocessing
 
-## 8. Generate AprilTag
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `enable_clahe` | bool | `true` | CLAHE contrast enhancement |
+| `clahe_clip_limit` | double | `2.0` | CLAHE clip limit |
+| `enable_sharpen` | bool | `false` | Unsharp mask |
+| `enable_blur` | bool | `false` | Gaussian blur |
 
-```bash
-# Using official generator tool
-pip install apriltag-generator
-python3 -c "
-import apriltag
-import cv2
-# Download tag36h11 images from:
-# https://github.com/AprilRobotics/apriltag-imgs
-# Print tag36h11_id_XX.png at physical size matching marker_size param
-"
-```
+### capture_node Parameters
 
-Or download directly: https://github.com/AprilRobotics/apriltag-imgs/tree/master/tag36h11
-
----
-
-## 9. Camera Calibration
-
-```bash
-# Print a 9x6 chessboard: https://calib.io/pages/camera-calibration-pattern-generator
-# Move board in front of camera (collect 20+ images)
-
-ros2 run camera_calibration cameracalibrator \
-  --size 9x6 --square 0.025 \
-  image:=/camera/image_raw camera:=/camera
-
-# Results saved to ~/.ros/camera_info/camera.yaml
-# Copy values to config/params.yaml: camera_matrix and dist_coeffs
-```
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `source` | string | `webcam` | `webcam` or `realsense` |
+| `device_id` | int | `6` | V4L2 device index |
+| `device_path` | string | `""` | `/dev/videoX` path (overrides `device_id`) |
+| `width` / `height` | int | `640`/`480` | Resolution |
+| `fps_limit` | double | `30.0` | Max capture FPS |
 
 ---
 
-## 10. Testing with rosbag
+## Published Topics
 
-```bash
-# Record
-ros2 bag record /camera/image_raw -o my_bag
-
-# Playback + detect
-ros2 bag play my_bag --loop &
-ros2 launch fiducial_detector ros_topic.launch.py
-```
-
----
-
-## 11. Jetson / Mini-PC Optimizations
-
-- Set `show_window: false` for headless operation
-- Reduce `tag_detector_->quad_decimate` to 4.0 if AprilTag is slow
-- Use `image_transport` compressed subscriber for network cameras:
-  ```bash
-  ros2 run fiducial_detector aruco_node \
-    --ros-args -p camera_topic:=/camera/image_raw/compressed
-  ```
-- Enable GPU-accelerated OpenCV (requires OpenCV built with CUDA):
-  ```bash
-  # Check CUDA support:
-  python3 -c "import cv2; print(cv2.cuda.getCudaEnabledDeviceCount())"
-  ```
+| Topic | Type | Description |
+|---|---|---|
+| `/fiducial/pose` | `geometry_msgs/PoseStamped` | 6DOF pose of primary marker |
+| `/fiducial/debug_image` | `sensor_msgs/Image` | Annotated frame |
+| `/fiducial/alignment` | `std_msgs/String` | `POSISI_CENTERING` / `GESER_KIRI` / etc. |
+| `/fiducial/fps` | `std_msgs/Float32` | Current detection FPS |
+| `/fiducial/current_dict` | `std_msgs/String` | Active dictionary name (AUTO mode) |
 
 ---
 
-## 12. Troubleshooting
+## Generate Markers
 
-| Problem                          | Solution                                                |
-|----------------------------------|---------------------------------------------------------|
-| `No module: apriltag`            | `sudo apt install libapriltag-dev libapriltag3`        |
-| `cv_bridge exception`            | Ensure camera publishes `bgr8` or `rgb8`                |
-| Markers not detected             | Ensure adequate lighting; check `dictionary_type`       |
-| Low FPS on Jetson                | Set `quad_decimate=4.0`, reduce resolution             |
-| Camera not found (`/dev/video0`) | `ls /dev/video*` and update `device` launch arg        |
-| `solvePnP failed`                | Set correct `camera_matrix` from calibration            |
-| Build error: `apriltag.h`        | `sudo apt install libapriltag-dev`                      |
-| `image_transport` not found      | `sudo apt install ros-humble-image-transport`           |
+ArUco markers from [chev.me/arucogen](https://chev.me/arucogen/) — recommended for KRTI 2026.
+
+AprilTag images: [github.com/AprilRobotics/apriltag-imgs](https://github.com/AprilRobotics/apriltag-imgs)
+
+Print at physical size matching `marker_size` parameter (e.g. 500mm = `marker_size:=0.5`).
+
+---
+
+## Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| `v4l2_camera` crashes Z16 error | Use `webcam.launch.xml` (C++ `capture_node`) instead |
+| Camera not found | `ls /dev/video*` — use `device_id:=N` arg |
+| `libapriltag.h` not found | `sudo apt install libapriltag-dev` |
+| RealSense not opening | Build with `-DUSE_REALSENSE=ON` |
+| Low FPS on Jetson | Set `apriltag_decimate:=2.0`, `show_window:=false` |
+| `solvePnP` failed | Run `calibration.launch.xml` first |
+| Ghost AprilTag detections | Increase `apriltag_min_margin` to `60`–`80` |

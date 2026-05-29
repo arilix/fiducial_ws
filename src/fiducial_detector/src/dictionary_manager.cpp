@@ -22,17 +22,21 @@ static const std::map<std::string, int> GLOBAL_DICT_MAP = {
   {"DICT_7X7_250",         cv::aruco::DICT_7X7_250},
   {"DICT_7X7_1000",        cv::aruco::DICT_7X7_1000},
   {"DICT_ARUCO_ORIGINAL",  cv::aruco::DICT_ARUCO_ORIGINAL},
-#if CV_VERSION_MAJOR > 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7)
-  {"DICT_ARUCO_MIP_36h12", cv::aruco::DICT_ARUCO_MIP_36h12},
-#endif
   {"DICT_APRILTAG_16h5",   cv::aruco::DICT_APRILTAG_16h5},
   {"DICT_APRILTAG_25h9",   cv::aruco::DICT_APRILTAG_25h9},
   {"DICT_APRILTAG_36h10",  cv::aruco::DICT_APRILTAG_36h10},
   {"DICT_APRILTAG_36h11",  cv::aruco::DICT_APRILTAG_36h11},
 };
 const std::vector<std::string> DictionaryManager::AUTO_SUBSET = {
-  "DICT_4X4_50", "DICT_5X5_50", "DICT_6X6_50", "DICT_7X7_50",
-  "DICT_ARUCO_ORIGINAL", "DICT_ARUCO_MIP_36h12",
+  // 4×4 family — fast, low density
+  "DICT_4X4_50",  "DICT_4X4_100",
+  // 5×5 family — medium density, common in competition markers
+  "DICT_5X5_50",  "DICT_5X5_100",
+  // 6×6 family — higher density, likely for KRTI 2026 (chev.me/arucogen)
+  "DICT_6X6_50",  "DICT_6X6_100",  "DICT_6X6_250",
+  // Original ArUco (legacy)
+  "DICT_ARUCO_ORIGINAL",
+  // AprilTag via OpenCV wrapper
   "DICT_APRILTAG_36h11",
 };
 const std::map<std::string, int>& DictionaryManager::getDictMap() {
@@ -55,37 +59,48 @@ cv::Ptr<cv::aruco::Dictionary> DictionaryManager::getDictionaryByName(
 {
   return cv::aruco::getPredefinedDictionary(getDictIdByName(name));
 }
+std::string DictionaryManager::getDictionaryFamily(const std::string& name) {
+  if (name.find("APRILTAG") != std::string::npos) return "apriltag";
+  if (name.find("MIP") != std::string::npos) return "mip";
+  if (name.find("ORIGINAL") != std::string::npos) return "aruco";
+  if (name.find("4X4") != std::string::npos) return "4x4";
+  if (name.find("5X5") != std::string::npos) return "5x5";
+  if (name.find("6X6") != std::string::npos) return "6x6";
+  if (name.find("7X7") != std::string::npos) return "7x7";
+  return "unknown";
+}
+int DictionaryManager::getBorderBitsForDict(const std::string& name) {
+  if (name.find("APRILTAG") != std::string::npos) return 2;
+  return 1;
+}
 DictionaryManager::DictionaryManager() {
   initAll();
 }
 void DictionaryManager::initAll()
 {
-  struct Meta { std::string family; int bits; int total; };
+  struct Meta { std::string family; int bits; int total; int border; };
   static const std::map<std::string, Meta> META = {
-    {"DICT_4X4_50",          {"4x4",    4,   50}},
-    {"DICT_4X4_100",         {"4x4",    4,  100}},
-    {"DICT_4X4_250",         {"4x4",    4,  250}},
-    {"DICT_4X4_1000",        {"4x4",    4, 1000}},
-    {"DICT_5X5_50",          {"5x5",    5,   50}},
-    {"DICT_5X5_100",         {"5x5",    5,  100}},
-    {"DICT_5X5_250",         {"5x5",    5,  250}},
-    {"DICT_5X5_1000",        {"5x5",    5, 1000}},
-    {"DICT_6X6_50",          {"6x6",    6,   50}},
-    {"DICT_6X6_100",         {"6x6",    6,  100}},
-    {"DICT_6X6_250",         {"6x6",    6,  250}},
-    {"DICT_6X6_1000",        {"6x6",    6, 1000}},
-    {"DICT_7X7_50",          {"7x7",    7,   50}},
-    {"DICT_7X7_100",         {"7x7",    7,  100}},
-    {"DICT_7X7_250",         {"7x7",    7,  250}},
-    {"DICT_7X7_1000",        {"7x7",    7, 1000}},
-    {"DICT_ARUCO_ORIGINAL",  {"aruco",  5, 1024}},
-#if CV_VERSION_MAJOR > 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7)
-    {"DICT_ARUCO_MIP_36h12", {"mip",    6,  250}},
-#endif
-    {"DICT_APRILTAG_16h5",   {"apriltag",4,  30}},
-    {"DICT_APRILTAG_25h9",   {"apriltag",5,  35}},
-    {"DICT_APRILTAG_36h10",  {"apriltag",6,  2320}},
-    {"DICT_APRILTAG_36h11",  {"apriltag",6,  587}},
+    {"DICT_4X4_50",          {"4x4",      4,   50, 1}},
+    {"DICT_4X4_100",         {"4x4",      4,  100, 1}},
+    {"DICT_4X4_250",         {"4x4",      4,  250, 1}},
+    {"DICT_4X4_1000",        {"4x4",      4, 1000, 1}},
+    {"DICT_5X5_50",          {"5x5",      5,   50, 1}},
+    {"DICT_5X5_100",         {"5x5",      5,  100, 1}},
+    {"DICT_5X5_250",         {"5x5",      5,  250, 1}},
+    {"DICT_5X5_1000",        {"5x5",      5, 1000, 1}},
+    {"DICT_6X6_50",          {"6x6",      6,   50, 1}},
+    {"DICT_6X6_100",         {"6x6",      6,  100, 1}},
+    {"DICT_6X6_250",         {"6x6",      6,  250, 1}},
+    {"DICT_6X6_1000",        {"6x6",      6, 1000, 1}},
+    {"DICT_7X7_50",          {"7x7",      7,   50, 1}},
+    {"DICT_7X7_100",         {"7x7",      7,  100, 1}},
+    {"DICT_7X7_250",         {"7x7",      7,  250, 1}},
+    {"DICT_7X7_1000",        {"7x7",      7, 1000, 1}},
+    {"DICT_ARUCO_ORIGINAL",  {"aruco",    5, 1024, 1}},
+    {"DICT_APRILTAG_16h5",   {"apriltag", 4,   30, 2}},
+    {"DICT_APRILTAG_25h9",   {"apriltag", 5,   35, 2}},
+    {"DICT_APRILTAG_36h10",  {"apriltag", 6, 2320, 2}},
+    {"DICT_APRILTAG_36h11",  {"apriltag", 6,  587, 2}},
   };
   for (const auto& kv : GLOBAL_DICT_MAP) {
     DictionaryInfo info;
@@ -93,9 +108,10 @@ void DictionaryManager::initAll()
     info.dict_id = kv.second;
     info.dict    = cv::aruco::getPredefinedDictionary(kv.second);
     const auto& m = META.at(kv.first);
-    info.family       = m.family;
-    info.marker_bits  = m.bits;
+    info.family        = m.family;
+    info.marker_bits   = m.bits;
     info.total_markers = m.total;
+    info.border_bits   = m.border;
     dicts_[kv.first] = std::move(info);
   }
 }
@@ -125,6 +141,16 @@ DictionaryScore DictionaryManager::lastScore(const std::string& name) const {
   if (it == scores_.end()) return DictionaryScore{};
   return it->second;
 }
+bool DictionaryManager::validateDictionary(const std::string& name) const {
+  auto it = dicts_.find(name);
+  if (it == dicts_.end()) return false;
+  const auto& info = it->second;
+  if (!info.dict) return false;
+  if (info.dict->markerSize <= 0) return false;
+  if (info.dict->bytesList.empty()) return false;
+  if (info.dict->bytesList.rows <= 0) return false;
+  return true;
+}
 DictDetectionResult DictionaryManager::detectWith(
   const std::string& dict_name,
   const cv::Mat& gray,
@@ -134,8 +160,15 @@ DictDetectionResult DictionaryManager::detectWith(
   res.dict_name = dict_name;
   const auto it = dicts_.find(dict_name);
   if (it == dicts_.end()) return res;
+
+  auto dp = cv::makePtr<cv::aruco::DetectorParameters>(*params);
+  dp->markerBorderBits = it->second.border_bits;
+  if (it->second.family == "apriltag") {
+    dp->cornerRefinementMethod = cv::aruco::CORNER_REFINE_APRILTAG;
+  }
+
   auto t0 = std::chrono::steady_clock::now();
-  cv::aruco::detectMarkers(gray, it->second.dict, res.corners, res.ids, params, res.rejected);
+  cv::aruco::detectMarkers(gray, it->second.dict, res.corners, res.ids, dp, res.rejected);
   auto t1 = std::chrono::steady_clock::now();
   double lat = std::chrono::duration<double, std::milli>(t1 - t0).count();
   int    valid    = (int)res.ids.size();
@@ -154,6 +187,7 @@ std::string DictionaryManager::autoDetect(
   std::string best_name = active_name_;
   double      best_score = -1e9;
   for (const auto& name : AUTO_SUBSET) {
+    if (dicts_.find(name) == dicts_.end()) continue;
     auto res = detectWith(name, gray, params);
     if (res.score.score > best_score) {
       best_score = res.score.score;

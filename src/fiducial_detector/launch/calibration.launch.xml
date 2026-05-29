@@ -1,0 +1,39 @@
+<!--
+  calibration.launch.xml
+  Run camera calibration using calibration_node.
+  Requires a camera source publishing on camera_topic.
+
+  Usage:
+    ros2 launch fiducial_detector calibration.launch.xml
+    ros2 launch fiducial_detector calibration.launch.xml camera_topic:=/my_cam/image_raw
+    ros2 launch fiducial_detector calibration.launch.xml output_yaml:=/home/user/calib.yaml
+    ros2 launch fiducial_detector calibration.launch.xml calib_mode:=CHARUCO
+
+  Press keys in the window:
+    SPACE  - capture calibration frame
+    s      - save and finish
+    q/ESC  - quit without saving
+-->
+<launch>
+  <arg name="camera_topic" default="/camera/image_raw"           description="Image source topic"/>
+  <arg name="output_yaml"  default="/tmp/camera_calibration.yaml" description="Output calibration file path"/>
+  <arg name="calib_mode"   default="CHARUCO"                     description="CHARUCO or STANDARD"/>
+  <arg name="charuco_cols" default="7"    description="ChArUco board columns"/>
+  <arg name="charuco_rows" default="5"    description="ChArUco board rows"/>
+  <arg name="charuco_sq"   default="0.035" description="Square size in metres"/>
+  <arg name="charuco_mk"   default="0.0175" description="Marker size in metres"/>
+  <arg name="min_frames"   default="15"   description="Minimum frames before calibration is valid"/>
+  <arg name="show_window"  default="true"/>
+
+  <node pkg="fiducial_detector" exec="calibration_node" name="calibration_node" output="screen">
+    <param name="camera_topic" value="$(var camera_topic)"/>
+    <param name="output_yaml"  value="$(var output_yaml)"/>
+    <param name="calib_mode"   value="$(var calib_mode)"/>
+    <param name="charuco_cols" value="$(var charuco_cols)"/>
+    <param name="charuco_rows" value="$(var charuco_rows)"/>
+    <param name="charuco_sq"   value="$(var charuco_sq)"/>
+    <param name="charuco_mk"   value="$(var charuco_mk)"/>
+    <param name="min_frames"   value="$(var min_frames)"/>
+    <param name="show_window"  value="$(var show_window)"/>
+  </node>
+</launch>

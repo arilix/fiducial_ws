@@ -22,6 +22,7 @@ struct DictionaryInfo {
   std::string                    family;
   int                            marker_bits;
   int                            total_markers;
+  int                            border_bits;
 };
 struct DictionaryScore {
   std::string dict_name;
@@ -42,8 +43,8 @@ struct DictionaryScore {
 struct DictDetectionResult {
   std::string                              dict_name;
   std::vector<int>                         ids;
-  std::vector<std::vector<cv::Point2f>>   corners;
-  std::vector<std::vector<cv::Point2f>>   rejected;
+  std::vector<std::vector<cv::Point2f>>    corners;
+  std::vector<std::vector<cv::Point2f>>    rejected;
   DictionaryScore                          score;
 };
 class DictionaryManager {
@@ -53,10 +54,13 @@ public:
   static int getDictIdByName(const std::string& name);
   static const std::map<std::string, int>& getDictMap();
   static std::vector<std::string> getAllNames();
+  static std::string getDictionaryFamily(const std::string& name);
+  static int getBorderBitsForDict(const std::string& name);
   bool setActive(const std::string& name);
   std::string activeName() const;
   cv::Ptr<cv::aruco::Dictionary> activeDict() const;
   bool hotReload(const std::string& name);
+  bool validateDictionary(const std::string& name) const;
   std::string autoDetect(
     const cv::Mat& gray,
     const cv::Ptr<cv::aruco::DetectorParameters>& params);

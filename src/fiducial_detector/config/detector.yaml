@@ -1,30 +1,36 @@
-# ═══════════════════════════════════════════════════════════════════════════
-# Fiducial Detector — Full Parameter Configuration
-# ═══════════════════════════════════════════════════════════════════════════
-
+# ═══════════════════════════════════════════════════
+# Fiducial Detector — Full Configuration
+# ═══════════════════════════════════════════════════
 aruco_node:
   ros__parameters:
+    # ── Core ──────────────────────────────────────
+    marker_size:          0.05
+    camera_topic:         "/camera/image_raw"
+    dictionary_type:      "DICT_4X4_50"
+    detection_mode:       "AUTO"      # SINGLE|AUTO|MULTI|BENCHMARK
+    benchmark_on_start:   false
 
-    # ── Node settings ────────────────────────────────────────────────────────
-    marker_size: 0.05           # Physical marker side length (meters)
-    camera_topic: "/camera/image_raw"
-    dictionary_type: "DICT_4X4_50"
-    # Supported: DICT_4X4_50, DICT_4X4_100, DICT_5X5_50, DICT_6X6_250,
-    #            DICT_7X7_1000, DICT_ARUCO_ORIGINAL,
-    #            DICT_APRILTAG_16h5, DICT_APRILTAG_25h9,
-    #            DICT_APRILTAG_36h10, DICT_APRILTAG_36h11
+    # ── Enable flags ──────────────────────────────
+    enable_charuco:       true
+    enable_gridboard:     false
+    enable_diamond:       false
+    enable_custom_dict:   false
+    custom_dict_path:     ""
 
-    enable_charuco: true
-    show_window: true
-    show_rejected: true
-    alignment_tolerance: 50     # Pixel radius for TARGET_LOCK
+    # ── Display ───────────────────────────────────
+    show_window:          true
+    show_rejected:        true
+    show_corner_labels:   true
+    show_orientation_arrow: true
+    show_confidence:      true
+    debug_windows:        false       # toggle with 'd' key
 
-    smoothing_alpha: 0.4        # EMA alpha [0=frozen, 1=raw]
-    max_missed_frames: 5
+    # ── Alignment ─────────────────────────────────
+    alignment_tolerance:  50
+    smoothing_alpha:      0.4
+    max_missed_frames:    5
 
-    # ── Camera intrinsics ─────────────────────────────────────────────────────
-    # !! Replace with values from your camera calibration !!
-    # Run: ros2 run camera_calibration cameracalibrator --size 9x6 --square 0.025
+    # ── Camera intrinsics ─────────────────────────
     camera_matrix:
       - 640.0
       - 0.0
@@ -37,68 +43,55 @@ aruco_node:
       - 1.0
     dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
 
-    # ── Adaptive Thresholding (DetectorParameters) ────────────────────────────
-    # The thresholding window is iterated from WinSizeMin to WinSizeMax in steps
-    # of WinSizeStep. Larger windows handle bigger markers and more blur.
-    adaptiveThreshWinSizeMin: 3
-    adaptiveThreshWinSizeMax: 23
-    adaptiveThreshWinSizeStep: 10
-    adaptiveThreshConstant: 7.0
+    # ── ChArUco board ─────────────────────────────
+    charuco_cols:         7
+    charuco_rows:         5
+    charuco_sq:           0.035
+    charuco_mk:           0.0175
 
-    # ── Contour / Candidate Filtering ─────────────────────────────────────────
-    # A marker's perimeter must be between [min,max]*max(width,height)
-    minMarkerPerimeterRate: 0.03
-    maxMarkerPerimeterRate: 4.0
-    # Polygonal approximation accuracy as fraction of perimeter
+    # ── GridBoard ─────────────────────────────────
+    gridboard_cols:       5
+    gridboard_rows:       7
+    gridboard_marker_size: 0.04
+    gridboard_sep:        0.01
+
+    # ── ArUco Detector Parameters ─────────────────
+    adaptiveThreshWinSizeMin:    3
+    adaptiveThreshWinSizeMax:    23
+    adaptiveThreshWinSizeStep:   10
+    adaptiveThreshConstant:      7.0
+    minMarkerPerimeterRate:      0.03
+    maxMarkerPerimeterRate:      4.0
     polygonalApproxAccuracyRate: 0.03
-    # Min distance between corners as fraction of perimeter
-    minCornerDistanceRate: 0.05
-    # Min pixel distance from image border
-    minDistanceToBorder: 3
-    # Min distance between markers
-    minMarkerDistanceRate: 0.05
-
-    # ── Perspective Removal / Bit Extraction ──────────────────────────────────
-    # Number of pixels per cell in the perspective-removed marker image
-    perspectiveRemovePixelPerCell: 8
-    # Fraction of each cell's margin to ignore (avoids edge bleed)
-    perspectiveRemoveIgnoredMarginPerCell: 0.13
-
-    # ── Marker Decoding ───────────────────────────────────────────────────────
-    # Max fraction of border bits that can be erroneous
+    minCornerDistanceRate:       0.05
+    minDistanceToBorder:         3
+    minMarkerDistanceRate:       0.05
+    perspectiveRemovePixelPerCell:          8
+    perspectiveRemoveIgnoredMarginPerCell:  0.13
     maxErroneousBitsInBorderRate: 0.35
-    # Error correction rate for Hamming distance
-    errorCorrectionRate: 0.6
-    detectInvertedMarker: false
+    errorCorrectionRate:          0.6
+    detectInvertedMarker:         false
+    cornerRefinementMethod:       1   # 0=NONE 1=SUBPIX 2=CONTOUR 3=APRILTAG
+    cornerRefinementWinSize:      5
+    cornerRefinementMaxIterations: 50
+    cornerRefinementMinAccuracy:   0.01
 
-    # ── Corner Refinement ─────────────────────────────────────────────────────
-    # 0=NONE, 1=SUBPIX (recommended), 2=CONTOUR, 3=APRILTAG
-    cornerRefinementMethod: 1
-    cornerRefinementWinSize: 5
-    cornerRefinementMaxIterations: 30
-    cornerRefinementMinAccuracy: 0.1
+    # ── Hybrid Detector ──────────────────────────
+    use_opencv_detector:      true
+    use_native_apriltag:      true
+    use_detector_fusion:      true
+    apriltag_family:          "tag36h11"
+    apriltag_threads:         4
+    apriltag_decimate:        1.0
+    apriltag_blur:            0.0
+    apriltag_refine_edges:    true
+    apriltag_sharpening:      0.25
+    apriltag_debug:           false
+    apriltag_max_hamming:     1
+    apriltag_min_margin:      40.0
 
-    # ── Performance Profiles ──────────────────────────────────────────────────
-    # HIGH FPS MODE: comment in to trade accuracy for speed
-    # adaptiveThreshWinSizeMin: 3
-    # adaptiveThreshWinSizeMax: 7
-    # adaptiveThreshWinSizeStep: 4
-    # perspectiveRemovePixelPerCell: 4
-    # cornerRefinementMethod: 0
-
-    # JETSON MODE: lower resolution thresholding
-    # adaptiveThreshWinSizeMax: 15
-    # perspectiveRemovePixelPerCell: 6
-
-    # ── Detection mode ─────────────────────────────────────────────────────────
-    # SINGLE: use dictionary_type only (fastest)
-    # AUTO:   auto-select best dict from AUTO_SUBSET each frame
-    # MULTI:  detect with all 22 dicts simultaneously (slowest, most robust)
-    # BENCHMARK: benchmark all 22 dicts at startup
-    detection_mode: "SINGLE"
-    benchmark_on_start: false
-
-    # ── Multi-dict / auto detection subset ────────────────────────────────────
-    # Available: DICT_4X4_50, DICT_4X4_100, ... DICT_ARUCO_MIP_36h12,
-    #            DICT_APRILTAG_16h5, DICT_APRILTAG_25h9,
-    #            DICT_APRILTAG_36h10, DICT_APRILTAG_36h11
+    # ── Preprocessing ────────────────────────────
+    enable_clahe:             true
+    clahe_clip_limit:         2.0
+    enable_sharpen:           false
+    enable_blur:              false

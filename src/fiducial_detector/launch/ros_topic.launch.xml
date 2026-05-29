@@ -1,0 +1,26 @@
+<!--
+  ros_topic.launch.xml
+  Subscribe to an existing ROS 2 camera topic (no camera node needed).
+  Use this when image_raw is already published by another node.
+
+  Usage:
+    ros2 launch fiducial_detector ros_topic.launch.xml
+    ros2 launch fiducial_detector ros_topic.launch.xml camera_topic:=/my_cam/image_raw
+    ros2 launch fiducial_detector ros_topic.launch.xml marker_size:=0.5 dictionary_type:=DICT_6X6_100
+-->
+<launch>
+  <arg name="camera_topic"    default="/camera/image_raw"  description="Existing image topic to subscribe"/>
+  <arg name="marker_size"     default="0.05"               description="Physical marker side length in metres"/>
+  <arg name="dictionary_type" default="DICT_4X4_50"        description="ArUco dictionary name or AUTO"/>
+  <arg name="detection_mode"  default="AUTO"               description="SINGLE or AUTO or MULTI"/>
+  <arg name="show_window"     default="true"/>
+
+  <node pkg="fiducial_detector" exec="aruco_node" name="aruco_node" output="screen">
+    <param from="$(find-pkg-share fiducial_detector)/config/detector.yaml"/>
+    <param name="camera_topic"    value="$(var camera_topic)"/>
+    <param name="marker_size"     value="$(var marker_size)"/>
+    <param name="dictionary_type" value="$(var dictionary_type)"/>
+    <param name="detection_mode"  value="$(var detection_mode)"/>
+    <param name="show_window"     value="$(var show_window)"/>
+  </node>
+</launch>

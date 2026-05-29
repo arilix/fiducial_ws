@@ -1,0 +1,21 @@
+<!--
+  benchmark.launch.xml
+  Run aruco_node in BENCHMARK mode to measure detection performance.
+  No camera node needed - uses whatever is publishing on camera_topic.
+
+  Usage:
+    ros2 launch fiducial_detector benchmark.launch.xml
+    ros2 launch fiducial_detector benchmark.launch.xml camera_topic:=/my_cam/image_raw
+-->
+<launch>
+  <arg name="camera_topic" default="/camera/image_raw" description="Image topic to benchmark against"/>
+  <arg name="show_window"  default="true"/>
+
+  <node pkg="fiducial_detector" exec="aruco_node" name="aruco_node" output="screen">
+    <param from="$(find-pkg-share fiducial_detector)/config/detector.yaml"/>
+    <param name="camera_topic"      value="$(var camera_topic)"/>
+    <param name="detection_mode"    value="BENCHMARK"/>
+    <param name="benchmark_on_start" value="true"/>
+    <param name="show_window"       value="$(var show_window)"/>
+  </node>
+</launch>

@@ -5,6 +5,7 @@
 #include <Eigen/Geometry>
 #include <vector>
 #include <map>
+#include <string>
 namespace fiducial_detector {
 struct PoseResult {
   cv::Vec3d rvec;

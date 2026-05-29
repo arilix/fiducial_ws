@@ -1,7 +1,9 @@
 #pragma once
 #include <chrono>
 #include <deque>
+#include <numeric>
 #include <mutex>
+#include <atomic>
 namespace fiducial_detector {
 class FpsMonitor {
 public:

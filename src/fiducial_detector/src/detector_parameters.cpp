@@ -1,19 +1,36 @@
 #include "fiducial_detector/detector_parameters.hpp"
+#include "fiducial_detector/dictionary_manager.hpp"
 namespace fiducial_detector {
 DetectorParametersManager::DetectorParametersManager()
 : params_(cv::aruco::DetectorParameters::create())
 {}
 int DetectorParametersManager::dictId(const std::string& name)
 {
-  auto it = DICT_NAME_MAP.find(name);
-  if (it != DICT_NAME_MAP.end()) return it->second;
-  RCLCPP_WARN(rclcpp::get_logger("DetectorParametersManager"),
-    "Unknown dictionary '%s', falling back to DICT_4X4_50", name.c_str());
-  return cv::aruco::DICT_4X4_50;
+  try {
+    return DictionaryManager::getDictIdByName(name);
+  } catch (const std::invalid_argument&) {
+    RCLCPP_WARN(rclcpp::get_logger("DetectorParametersManager"),
+      "Unknown dictionary '%s', falling back to DICT_4X4_50", name.c_str());
+    return cv::aruco::DICT_4X4_50;
+  }
 }
 cv::Ptr<cv::aruco::Dictionary> DetectorParametersManager::makeDict(const std::string& name)
 {
-  return cv::aruco::getPredefinedDictionary(dictId(name));
+  try {
+    return DictionaryManager::getDictionaryByName(name);
+  } catch (const std::invalid_argument&) {
+    return cv::aruco::getPredefinedDictionary(cv::aruco::DICT_4X4_50);
+  }
+}
+bool DetectorParametersManager::isAprilTagDict(const std::string& name) {
+  return name.find("APRILTAG") != std::string::npos;
+}
+bool DetectorParametersManager::isMIPDict(const std::string& name) {
+  return name.find("MIP") != std::string::npos;
+}
+int DetectorParametersManager::borderBitsForDict(const std::string& name) {
+  if (isAprilTagDict(name)) return 2;
+  return 1;
 }
 void DetectorParametersManager::declareAll(rclcpp::Node* node)
 {
@@ -21,21 +38,22 @@ void DetectorParametersManager::declareAll(rclcpp::Node* node)
   node->declare_parameter("adaptiveThreshWinSizeMax",   23);
   node->declare_parameter("adaptiveThreshWinSizeStep",   10);
   node->declare_parameter("adaptiveThreshConstant",     7.0);
-  node->declare_parameter("minMarkerPerimeterRate",     0.03);
+  node->declare_parameter("minMarkerPerimeterRate",     0.02);
   node->declare_parameter("maxMarkerPerimeterRate",     4.0);
   node->declare_parameter("polygonalApproxAccuracyRate",0.03);
   node->declare_parameter("minCornerDistanceRate",      0.05);
   node->declare_parameter("minDistanceToBorder",        3);
   node->declare_parameter("minMarkerDistanceRate",      0.05);
+  node->declare_parameter("markerBorderBits",           1);
   node->declare_parameter("perspectiveRemovePixelPerCell",          8);
   node->declare_parameter("perspectiveRemoveIgnoredMarginPerCell", 0.13);
   node->declare_parameter("maxErroneousBitsInBorderRate", 0.35);
   node->declare_parameter("errorCorrectionRate",          0.6);
-  node->declare_parameter("detectInvertedMarker",         false);
+  node->declare_parameter("detectInvertedMarker",         true);
   node->declare_parameter("cornerRefinementMethod",       1);
   node->declare_parameter("cornerRefinementWinSize",      5);
-  node->declare_parameter("cornerRefinementMaxIterations",30);
-  node->declare_parameter("cornerRefinementMinAccuracy",  0.1);
+  node->declare_parameter("cornerRefinementMaxIterations",50);
+  node->declare_parameter("cornerRefinementMinAccuracy",  0.01);
 }
 void DetectorParametersManager::bind(rclcpp::Node* node)
 {
@@ -49,6 +67,7 @@ void DetectorParametersManager::bind(rclcpp::Node* node)
   params_->minCornerDistanceRate       = node->get_parameter("minCornerDistanceRate").as_double();
   params_->minDistanceToBorder         = node->get_parameter("minDistanceToBorder").as_int();
   params_->minMarkerDistanceRate       = node->get_parameter("minMarkerDistanceRate").as_double();
+  params_->markerBorderBits            = node->get_parameter("markerBorderBits").as_int();
   params_->perspectiveRemovePixelPerCell =
     node->get_parameter("perspectiveRemovePixelPerCell").as_int();
   params_->perspectiveRemoveIgnoredMarginPerCell =
@@ -67,5 +86,43 @@ void DetectorParametersManager::bind(rclcpp::Node* node)
     node->get_parameter("cornerRefinementMaxIterations").as_int();
   params_->cornerRefinementMinAccuracy =
     node->get_parameter("cornerRefinementMinAccuracy").as_double();
+}
+void DetectorParametersManager::applyDictionaryProfile(const std::string& dict_name)
+{
+  auto logger = rclcpp::get_logger("DetectorParametersManager");
+
+  if (isAprilTagDict(dict_name)) {
+    // AprilTag uses 2-bit borders — critical fix for detection
+    params_->markerBorderBits                    = 2;
+    params_->cornerRefinementMethod              = cv::aruco::CORNER_REFINE_APRILTAG;
+    params_->adaptiveThreshConstant              = 7.0;
+    params_->minCornerDistanceRate               = 0.02;
+    params_->minDistanceToBorder                 = 3;
+    params_->minMarkerPerimeterRate              = 0.02;
+    params_->maxMarkerPerimeterRate              = 4.0;
+    params_->polygonalApproxAccuracyRate         = 0.03;
+    params_->perspectiveRemovePixelPerCell       = 8;
+    params_->perspectiveRemoveIgnoredMarginPerCell = 0.13;
+    params_->maxErroneousBitsInBorderRate        = 0.5;
+    params_->errorCorrectionRate                 = 0.6;
+    params_->detectInvertedMarker                = true;
+    params_->cornerRefinementWinSize             = 5;
+    params_->cornerRefinementMaxIterations       = 50;
+    params_->cornerRefinementMinAccuracy         = 0.01;
+    RCLCPP_INFO(logger, "Applied AprilTag profile: borderBits=2 cornerRefine=APRILTAG");
+  } else if (isMIPDict(dict_name)) {
+    params_->markerBorderBits                    = 1;
+    params_->cornerRefinementMethod              = cv::aruco::CORNER_REFINE_SUBPIX;
+    params_->minMarkerPerimeterRate              = 0.02;
+    params_->maxMarkerPerimeterRate              = 4.0;
+    params_->maxErroneousBitsInBorderRate        = 0.5;
+    params_->errorCorrectionRate                 = 0.8;
+    params_->detectInvertedMarker                = true;
+    params_->cornerRefinementMaxIterations       = 50;
+    params_->cornerRefinementMinAccuracy         = 0.01;
+    RCLCPP_INFO(logger, "Applied MIP profile: borderBits=1 errorRate=0.8");
+  } else {
+    RCLCPP_DEBUG(logger, "Using standard ArUco profile for %s", dict_name.c_str());
+  }
 }
 }
