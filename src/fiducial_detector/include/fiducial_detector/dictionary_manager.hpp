@@ -61,6 +61,7 @@ public:
   cv::Ptr<cv::aruco::Dictionary> activeDict() const;
   bool hotReload(const std::string& name);
   bool validateDictionary(const std::string& name) const;
+  void printStartupValidation(const std::string& name) const;
   std::string autoDetect(
     const cv::Mat& gray,
     const cv::Ptr<cv::aruco::DetectorParameters>& params);

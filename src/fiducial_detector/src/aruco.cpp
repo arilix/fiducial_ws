@@ -21,6 +21,21 @@ FiducialDetector::FiducialDetector(const rclcpp::NodeOptions& options)
   initDetectors();
   initPublishers();
   initSubscriber();
+  // Do NOT start capture_thread_ here — the executor has not started spinning
+  // yet. A thread calling pub_internal_cam_->publish() before spin() runs will
+  // crash the RCL layer. Defer via a one-shot timer instead.
+  if (capture_internal_) {
+    // Open the camera device now (no ROS publishing yet)
+    initInternalCapture();
+    // Schedule the thread start 200ms after spin begins
+    capture_start_timer_ = create_wall_timer(
+      std::chrono::milliseconds(200),
+      [this]() {
+        capture_start_timer_->cancel();
+        capture_running_ = true;
+        capture_thread_  = std::thread(&FiducialDetector::loopInternalCapture, this);
+      });
+  }
   fps_timer_ = create_wall_timer(
     std::chrono::seconds(1),
     std::bind(&FiducialDetector::fpsTimerCallback, this));
@@ -35,18 +50,29 @@ FiducialDetector::FiducialDetector(const rclcpp::NodeOptions& options)
   RCLCPP_INFO(get_logger(), "  dictionary      : %s", dictionary_type_.c_str());
   RCLCPP_INFO(get_logger(), "  enable_charuco  : %s", enable_charuco_ ? "true":"false");
   RCLCPP_INFO(get_logger(), "  alignment_tol   : %d px", alignment_tolerance_);
+  if (capture_internal_) {
+    RCLCPP_INFO(get_logger(), "  capture_internal: ON (device=%s)",
+      capture_device_path_.empty()
+        ? ("/dev/video" + std::to_string(capture_device_id_)).c_str()
+        : capture_device_path_.c_str());
+  }
 }
 FiducialDetector::~FiducialDetector()
 {
-  if (show_window_) cv::destroyAllWindows();
+  if (capture_internal_) {
+    capture_running_ = false;
+    if (capture_thread_.joinable()) capture_thread_.join();
+    if (cap_.isOpened()) cap_.release();
+  }
+  if (show_window_) { try { cv::destroyAllWindows(); } catch (...) {} }
 }
 void FiducialDetector::declareParameters()
 {
   declare_parameter("marker_size",         0.05);
   declare_parameter("camera_topic",        "/camera/image_raw");
   declare_parameter("dictionary_type",     "DICT_4X4_50");
-  declare_parameter("enable_charuco",      true);
-  declare_parameter("show_window",         true);
+  declare_parameter("enable_charuco",      false);
+  declare_parameter("show_window",         false);
   declare_parameter("show_rejected",       true);
   declare_parameter("alignment_tolerance", 50);
   declare_parameter("smoothing_alpha",     0.4);
@@ -87,6 +113,13 @@ void FiducialDetector::declareParameters()
   declare_parameter("clahe_clip_limit", 2.0);
   declare_parameter("enable_sharpen", false);
   declare_parameter("enable_blur", false);
+  // Internal camera capture (use instead of separate capture_node)
+  declare_parameter("capture_internal", false);
+  declare_parameter("capture_device_id",   0);
+  declare_parameter("capture_device_path", std::string(""));
+  declare_parameter("capture_width",  640);
+  declare_parameter("capture_height", 480);
+  declare_parameter("capture_fps",    30.0);
   det_params_mgr_ = std::make_unique<DetectorParametersManager>();
   det_params_mgr_->declareAll(this);
 }
@@ -132,6 +165,12 @@ void FiducialDetector::loadRosParams()
   clahe_clip_            = get_parameter("clahe_clip_limit").as_double();
   enable_sharpen_        = get_parameter("enable_sharpen").as_bool();
   enable_blur_           = get_parameter("enable_blur").as_bool();
+  capture_internal_    = get_parameter("capture_internal").as_bool();
+  capture_device_id_   = get_parameter("capture_device_id").as_int();
+  capture_device_path_ = get_parameter("capture_device_path").as_string();
+  capture_width_       = get_parameter("capture_width").as_int();
+  capture_height_      = get_parameter("capture_height").as_int();
+  capture_fps_         = get_parameter("capture_fps").as_double();
   detection_mode_str_ = get_parameter("detection_mode").as_string();
   if      (detection_mode_str_ == "AUTO")      detection_mode_ = DetectionMode::AUTO;
   else if (detection_mode_str_ == "MULTI")     detection_mode_ = DetectionMode::MULTI;
@@ -165,15 +204,10 @@ void FiducialDetector::initDetectors()
   dict_manager_ = std::make_unique<DictionaryManager>();
   dict_manager_->setActive(dictionary_type_);
   aruco_dict_ = dict_manager_->activeDict();
-  RCLCPP_INFO(get_logger(), "ArUco dictionary: %s", dictionary_type_.c_str());
+  dict_manager_->printStartupValidation(dictionary_type_);
   det_params_mgr_->bind(this);
   det_params_mgr_->applyDictionaryProfile(dictionary_type_);
-  if (dict_manager_->validateDictionary(dictionary_type_)) {
-    auto& di = dict_manager_->info(dictionary_type_);
-    RCLCPP_INFO(get_logger(),
-      "Dictionary validated: %s | markerSize=%d | markers=%d | borderBits=%d",
-      di.name.c_str(), di.marker_bits, di.total_markers, di.border_bits);
-  } else {
+  if (!dict_manager_->validateDictionary(dictionary_type_)) {
     RCLCPP_WARN(get_logger(), "Dictionary validation failed: %s", dictionary_type_.c_str());
   }
   if (enable_clahe_) {
@@ -202,8 +236,10 @@ void FiducialDetector::initDetectors()
   RCLCPP_INFO(get_logger(),
     "AprilTag3: %d families loaded [%s] | total_tags=%d | threads=%d",
     atb.loadedFamilyCount(), fam_list.c_str(), atb.familyCount(), at_cfg.nthreads);
-  charuco_handler_ = std::make_unique<CharucoHandler>(
-    charuco_cols_, charuco_rows_, charuco_sq_, charuco_mk_, aruco_dict_);
+  if (enable_charuco_) {
+    charuco_handler_ = std::make_unique<CharucoHandler>(
+      charuco_cols_, charuco_rows_, charuco_sq_, charuco_mk_, aruco_dict_);
+  }
   if (enable_gridboard_) {
     GridBoardConfig bcfg;
     bcfg.markers_x   = gridboard_cols_;
@@ -250,6 +286,9 @@ void FiducialDetector::initSubscriber()
 }
 void FiducialDetector::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr& msg)
 {
+  // Serialize frame processing — cv::aruco::detectMarkers is not re-entrant safe
+  // across simultaneous threads (esp. with CORNER_REFINE_SUBPIX).
+  std::lock_guard<std::mutex> cb_lock(callback_mutex_);
   cam_connected_ = true;
   last_frame_time_ = msg->header.stamp;
   cv::Mat frame;
@@ -269,6 +308,7 @@ void FiducialDetector::imageCallback(const sensor_msgs::msg::Image::ConstSharedP
   estimatePoses(result);
   cv::Mat annotated = frame.clone();
   bool any_locked = false;
+
   for (const auto& m : result.markers) {
     std::vector<std::vector<cv::Point2f>> c_wrap{m.corners};
     std::vector<int> id_wrap{m.id};
@@ -348,7 +388,7 @@ DetectionResult FiducialDetector::runDetection(const cv::Mat& frame)
         marker_decoder_->updateBorderBits(
           DictionaryManager::getBorderBitsForDict(best));
         // 3. CharucoHandler (uses the same dict for board interpolation)
-        if (charuco_handler_) {
+        if (enable_charuco_ && charuco_handler_) {
           charuco_handler_->reconfigure(
             charuco_cols_, charuco_rows_, charuco_sq_, charuco_mk_, aruco_dict_);
         }
@@ -481,11 +521,54 @@ void FiducialDetector::estimatePoses(DetectionResult& result)
     }
   }
 }
+void FiducialDetector::logDetectedMarkers(const DetectionResult& result) const
+{
+  if (result.markers.empty()) return;
+  // Ambil FPS dan latency dari monitor untuk ditampilkan per-frame
+  float  fps_now  = fps_monitor_.getFps();
+  double lat_ms   = fps_monitor_.getLatencyMs();
+  RCLCPP_INFO(get_logger(),
+    "[Frame %llu] %zu marker(s) | FPS=%.1f | Lat=%.1fms",
+    (unsigned long long)frame_count_, result.markers.size(), fps_now, lat_ms);
+  for (std::size_t i = 0; i < result.markers.size(); ++i) {
+    const auto& m = result.markers[i];
+    std::string backend = HybridDetector::backendName(m.source);
+    float conf_pct = m.confidence.aggregate * 100.f;
+    if (m.type == MarkerType::APRILTAG) {
+      RCLCPP_INFO(get_logger(),
+        "  [%zu] Family=%-14s  ID=%-4d  Margin=%.1f  Hamming=%d  Backend=%-9s  FPS=%.1f  Center=(%.0f,%.0f)",
+        i, dictionary_type_.c_str(), m.id, m.decision_margin, m.hamming,
+        backend.c_str(), fps_now, m.center.x, m.center.y);
+    } else {
+      RCLCPP_INFO(get_logger(),
+        "  [%zu] Family=%-14s  ID=%-4d  Conf=%.0f%%  Backend=%-9s  FPS=%.1f  Center=(%.0f,%.0f)",
+        i, dictionary_type_.c_str(), m.id, conf_pct,
+        backend.c_str(), fps_now, m.center.x, m.center.y);
+    }
+    if (m.pose.valid) {
+      RCLCPP_INFO(get_logger(),
+        "       Pose=(%.3f, %.3f, %.3f)m  Dist=%.3fm",
+        m.pose.tvec[0], m.pose.tvec[1], m.pose.tvec[2], m.pose.distance);
+    }
+    // Terminal position guidance
+    if (result.frame_size.width > 0 && result.frame_size.height > 0) {
+      std::string align = visualizer_->alignmentString(m.center, result.frame_size);
+      if (align == "POSISI_CENTERING") {
+        RCLCPP_INFO(get_logger(),
+          "  *** POSISI CENTERING *** — ID=%d tepat di tengah kamera", m.id);
+      } else {
+        RCLCPP_INFO(get_logger(),
+          "       Posisi ID=%d: %s", m.id, align.c_str());
+      }
+    }
+  }
+}
 void FiducialDetector::publishAll(
   const DetectionResult& result,
   const cv::Mat& annotated,
   const rclcpp::Time& stamp)
 {
+  logDetectedMarkers(result);
   auto img_msg = cv_bridge::CvImage(
     std_msgs::msg::Header(), "bgr8", annotated).toImageMsg();
   img_msg->header.stamp    = stamp;
@@ -500,7 +583,6 @@ void FiducialDetector::publishAll(
       msg.data = "NO_MARKER";
     }
     pub_alignment_->publish(msg);
-    RCLCPP_INFO(get_logger(), "FPS: %.1f | Alignment: %s", fps_monitor_.getFps(), msg.data.c_str());
   }
   for (const auto& m : result.markers) {
     if (m.pose.valid) {
@@ -553,39 +635,41 @@ void FiducialDetector::enqueueDisplay(const cv::Mat& frame)
 bool FiducialDetector::displayLoop()
 {
   if (!show_window_) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); return rclcpp::ok(); }
-  // Shared logic: wait for frame, imshow, handle ESC
-  bool ok = runDisplayLoop(display_ready_, display_mutex_, display_cv_,
-                           display_frame_, "Fiducial Detector");
-  if (!ok) return false;
-  // FiducialDetector-exclusive: debug sub-windows
-  if (show_cells_window_ || show_thresh_window_ || show_contour_window_ || show_rejected_window_) {
-    std::lock_guard<std::mutex> lk(debug_mutex_);
-    if (show_cells_window_   && last_debug_.valid && !last_debug_.cell_grid_image.empty())
-      cv::imshow("Marker Cells", last_debug_.cell_grid_image);
-    if (show_thresh_window_  && last_debug_.valid && !last_debug_.threshold_image.empty())
-      cv::imshow("Threshold",   last_debug_.threshold_image);
-    if (show_contour_window_ && last_debug_.valid && !last_debug_.contour_image.empty())
-      cv::imshow("Contours",    last_debug_.contour_image);
-    if (show_rejected_window_&& last_debug_.valid && !last_debug_.rejected_image.empty())
-      cv::imshow("Rejected",    last_debug_.rejected_image);
-  }
-  // Debug window key bindings (processed after the shared waitKey(1) in runDisplayLoop)
-  // Note: runDisplayLoop already called waitKey(1); call again only if debug windows are open
-  if (show_cells_window_ || show_thresh_window_ || show_contour_window_ || show_rejected_window_) {
-    int key2 = cv::waitKey(1);
-    if      (key2 == 'd') { bool v=!show_cells_window_; show_cells_window_=v; show_thresh_window_=v; show_contour_window_=v; show_rejected_window_=v; }
-    else if (key2 == 'c') show_cells_window_    = !show_cells_window_;
-    else if (key2 == 't') show_thresh_window_   = !show_thresh_window_;
-    else if (key2 == 'n') show_contour_window_  = !show_contour_window_;
-    else if (key2 == 'r') show_rejected_window_ = !show_rejected_window_;
-  } else {
-    // Still allow toggling debug windows from the main window keypress
-    int key2 = cv::waitKey(1);
-    if      (key2 == 'd') { show_cells_window_=true; show_thresh_window_=true; show_contour_window_=true; show_rejected_window_=true; }
-    else if (key2 == 'c') show_cells_window_    = true;
-    else if (key2 == 't') show_thresh_window_   = true;
-    else if (key2 == 'n') show_contour_window_  = true;
-    else if (key2 == 'r') show_rejected_window_ = true;
+  try {
+    bool ok = runDisplayLoop(display_ready_, display_mutex_, display_cv_,
+                             display_frame_, "Fiducial Detector");
+    if (!ok) return false;
+    if (show_cells_window_ || show_thresh_window_ || show_contour_window_ || show_rejected_window_) {
+      std::lock_guard<std::mutex> lk(debug_mutex_);
+      if (show_cells_window_   && last_debug_.valid && !last_debug_.cell_grid_image.empty())
+        cv::imshow("Marker Cells", last_debug_.cell_grid_image);
+      if (show_thresh_window_  && last_debug_.valid && !last_debug_.threshold_image.empty())
+        cv::imshow("Threshold",   last_debug_.threshold_image);
+      if (show_contour_window_ && last_debug_.valid && !last_debug_.contour_image.empty())
+        cv::imshow("Contours",    last_debug_.contour_image);
+      if (show_rejected_window_&& last_debug_.valid && !last_debug_.rejected_image.empty())
+        cv::imshow("Rejected",    last_debug_.rejected_image);
+      int key2 = cv::waitKey(1);
+      if      (key2 == 'd') { bool v=!show_cells_window_; show_cells_window_=v; show_thresh_window_=v; show_contour_window_=v; show_rejected_window_=v; }
+      else if (key2 == 'c') show_cells_window_    = !show_cells_window_;
+      else if (key2 == 't') show_thresh_window_   = !show_thresh_window_;
+      else if (key2 == 'n') show_contour_window_  = !show_contour_window_;
+      else if (key2 == 'r') show_rejected_window_ = !show_rejected_window_;
+    } else {
+      int key2 = cv::waitKey(1);
+      if      (key2 == 'd') { show_cells_window_=true; show_thresh_window_=true; show_contour_window_=true; show_rejected_window_=true; }
+      else if (key2 == 'c') show_cells_window_    = true;
+      else if (key2 == 't') show_thresh_window_   = true;
+      else if (key2 == 'n') show_contour_window_  = true;
+      else if (key2 == 'r') show_rejected_window_ = true;
+    }
+  } catch (const cv::Exception& e) {
+    RCLCPP_WARN_ONCE(get_logger(),
+      "OpenCV display error (no GUI available?): %s — disabling show_window", e.what());
+    show_window_ = false;
+  } catch (...) {
+    RCLCPP_WARN_ONCE(get_logger(), "Display loop exception — disabling show_window");
+    show_window_ = false;
   }
   return rclcpp::ok();
 }
@@ -609,4 +693,79 @@ void FiducialDetector::computeConfidence(DetectionResult& result)
       intrinsics_.K, intrinsics_.D, 0, 4, 0, marker_size_);
   }
 }
+void FiducialDetector::initInternalCapture()
+{
+  std::string dev = capture_device_path_.empty()
+    ? std::to_string(capture_device_id_)
+    : capture_device_path_;
+
+  if (capture_device_path_.empty()) {
+    cap_.open(capture_device_id_, cv::CAP_V4L2);
+  } else {
+    cap_.open(capture_device_path_, cv::CAP_V4L2);
+  }
+
+  if (!cap_.isOpened()) {
+    RCLCPP_ERROR(get_logger(),
+      "capture_internal: failed to open camera '%s' — node will wait for external image topic",
+      dev.c_str());
+    capture_internal_ = false;
+    return;
+  }
+
+  cap_.set(cv::CAP_PROP_FRAME_WIDTH,  capture_width_);
+  cap_.set(cv::CAP_PROP_FRAME_HEIGHT, capture_height_);
+  cap_.set(cv::CAP_PROP_FPS,          capture_fps_);
+
+  RCLCPP_INFO(get_logger(),
+    "capture_internal: opened %s | %.0fx%.0f @ %.0ffps",
+    dev.c_str(),
+    cap_.get(cv::CAP_PROP_FRAME_WIDTH),
+    cap_.get(cv::CAP_PROP_FRAME_HEIGHT),
+    cap_.get(cv::CAP_PROP_FPS));
+
+  // Publisher is created here but the capture_thread_ is started by a deferred
+  // one-shot timer AFTER the executor begins spinning (see constructor).
+  auto qos = rclcpp::QoS(rclcpp::KeepLast(5)).reliable();
+  pub_internal_cam_ = create_publisher<sensor_msgs::msg::Image>(camera_topic_, qos);
+  // NOTE: capture_running_ and capture_thread_ are set by capture_start_timer_
 }
+
+void FiducialDetector::loopInternalCapture()
+{
+  const double min_interval_s = (capture_fps_ > 0) ? 1.0 / capture_fps_ : 0.0;
+  cv::Mat frame;
+
+  while (capture_running_ && rclcpp::ok()) {
+    auto t_start = std::chrono::steady_clock::now();
+
+    if (!cap_.read(frame) || frame.empty()) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+        "capture_internal: camera read failed — retrying");
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      if (capture_device_path_.empty())
+        cap_.open(capture_device_id_, cv::CAP_V4L2);
+      else
+        cap_.open(capture_device_path_, cv::CAP_V4L2);
+      continue;
+    }
+
+    auto msg = std::make_shared<sensor_msgs::msg::Image>();
+    msg->header.stamp    = now();
+    msg->header.frame_id = "camera_optical_frame";
+    msg->height   = frame.rows;
+    msg->width    = frame.cols;
+    msg->encoding = "bgr8";
+    msg->step     = frame.step;
+    msg->data.assign(frame.datastart, frame.dataend);
+    pub_internal_cam_->publish(std::move(*msg));
+
+    auto elapsed = std::chrono::steady_clock::now() - t_start;
+    double elapsed_s = std::chrono::duration<double>(elapsed).count();
+    if (elapsed_s < min_interval_s) {
+      std::this_thread::sleep_for(
+        std::chrono::duration<double>(min_interval_s - elapsed_s));
+    }
+  }
+}
+} // namespace fiducial_detector

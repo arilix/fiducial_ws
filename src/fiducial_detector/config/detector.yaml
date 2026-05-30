@@ -6,24 +6,33 @@ aruco_node:
     # ── Core ──────────────────────────────────────
     marker_size:          0.05
     camera_topic:         "/camera/image_raw"
-    dictionary_type:      "DICT_4X4_50"
-    detection_mode:       "AUTO"      # SINGLE|AUTO|MULTI|BENCHMARK
+    dictionary_type:      "DICT_7X7_50"
+    detection_mode:       "SINGLE"    # SINGLE|AUTO|MULTI|BENCHMARK — AUTO disabled: unsafe with capture_internal
     benchmark_on_start:   false
 
     # ── Enable flags ──────────────────────────────
-    enable_charuco:       true
+    enable_charuco:       false
     enable_gridboard:     false
     enable_diamond:       false
     enable_custom_dict:   false
     custom_dict_path:     ""
 
     # ── Display ───────────────────────────────────
-    show_window:          true
+    show_window:          false
     show_rejected:        true
     show_corner_labels:   true
     show_orientation_arrow: true
     show_confidence:      true
-    debug_windows:        false       # toggle with 'd' key
+    debug_windows:        false
+
+    # ── Internal Camera Capture ───────────────────
+    # Set capture_internal=true to skip capture_node entirely (all-in-1)
+    capture_internal:     false
+    capture_device_id:    0            # /dev/videoN
+    capture_device_path:  ""           # overrides capture_device_id if set
+    capture_width:        640
+    capture_height:       480
+    capture_fps:          30.0
 
     # ── Alignment ─────────────────────────────────
     alignment_tolerance:  50

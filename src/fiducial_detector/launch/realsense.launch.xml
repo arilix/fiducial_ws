@@ -1,33 +1,35 @@
 <!--
-  realsense.launch.xml - Intel RealSense + fiducial_detector (pure C++ pipeline)
-  Requires build flag USE_REALSENSE=ON (via cmake-args in colcon)
+  realsense.launch.xml - Intel RealSense + fiducial_detector
+  Uses the official realsense2_camera ROS2 package — no custom build flags needed.
 
   Usage:
     ros2 launch fiducial_detector realsense.launch.xml
     ros2 launch fiducial_detector realsense.launch.xml marker_size:=0.5
-    ros2 launch fiducial_detector realsense.launch.xml width:=1280 height:=720
+    ros2 launch fiducial_detector realsense.launch.xml width:=1280 height:=720 fps_limit:=30
 -->
 <launch>
   <arg name="width"            default="640"/>
   <arg name="height"           default="480"/>
-  <arg name="fps_limit"        default="30.0"/>
-  <arg name="marker_size"      default="0.05"        description="Physical marker size in metres"/>
-  <arg name="dictionary_type"  default="DICT_4X4_50" description="ArUco dict name or AUTO"/>
-  <arg name="detection_mode"   default="AUTO"        description="SINGLE or AUTO or MULTI"/>
+  <arg name="fps_limit"        default="30"           description="Camera FPS (integer)"/>
+  <arg name="marker_size"      default="0.05"          description="Physical marker size in metres"/>
+  <arg name="dictionary_type"  default="DICT_7X7_50"   description="ArUco dict name"/>
+  <arg name="detection_mode"   default="SINGLE"         description="SINGLE or MULTI (avoid AUTO with RealSense)"/>
   <arg name="show_window"      default="true"/>
 
-  <node pkg="fiducial_detector" exec="capture_node" name="capture_node" output="screen">
-    <param name="source"       value="realsense"/>
-    <param name="width"        value="$(var width)"/>
-    <param name="height"       value="$(var height)"/>
-    <param name="fps_limit"    value="$(var fps_limit)"/>
-    <param name="output_topic" value="/camera/image_raw"/>
-    <param name="frame_id"     value="camera_color_optical_frame"/>
+  <!-- Official Intel RealSense ROS2 driver — publishes /camera/camera/color/image_raw -->
+  <!-- Do NOT set name= here: camera_name param controls both node name and topic prefix -->
+  <node pkg="realsense2_camera" exec="realsense2_camera_node"
+        namespace="camera" output="screen">
+    <param name="camera_name"               value="camera"/>
+    <param name="enable_color"              value="true"/>
+    <param name="enable_depth"              value="false"/>
+    <param name="enable_infra"              value="false"/>
+    <param name="rgb_camera.color_profile"  value="$(var width),$(var height),$(var fps_limit)"/>
   </node>
 
   <node pkg="fiducial_detector" exec="aruco_node" name="aruco_node" output="screen">
     <param from="$(find-pkg-share fiducial_detector)/config/detector.yaml"/>
-    <param name="camera_topic"    value="/camera/image_raw"/>
+    <param name="camera_topic"    value="/camera/camera/color/image_raw"/>
     <param name="marker_size"     value="$(var marker_size)"/>
     <param name="dictionary_type" value="$(var dictionary_type)"/>
     <param name="detection_mode"  value="$(var detection_mode)"/>

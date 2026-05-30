@@ -28,6 +28,9 @@ bool DetectorParametersManager::isAprilTagDict(const std::string& name) {
 bool DetectorParametersManager::isMIPDict(const std::string& name) {
   return name.find("MIP") != std::string::npos;
 }
+bool DetectorParametersManager::is7x7Dict(const std::string& name) {
+  return name.find("7X7") != std::string::npos;
+}
 int DetectorParametersManager::borderBitsForDict(const std::string& name) {
   if (isAprilTagDict(name)) return 2;
   return 1;
@@ -92,37 +95,63 @@ void DetectorParametersManager::applyDictionaryProfile(const std::string& dict_n
   auto logger = rclcpp::get_logger("DetectorParametersManager");
 
   if (isAprilTagDict(dict_name)) {
-    // AprilTag uses 2-bit borders — critical fix for detection
-    params_->markerBorderBits                    = 2;
-    params_->cornerRefinementMethod              = cv::aruco::CORNER_REFINE_APRILTAG;
-    params_->adaptiveThreshConstant              = 7.0;
-    params_->minCornerDistanceRate               = 0.02;
-    params_->minDistanceToBorder                 = 3;
-    params_->minMarkerPerimeterRate              = 0.02;
-    params_->maxMarkerPerimeterRate              = 4.0;
-    params_->polygonalApproxAccuracyRate         = 0.03;
-    params_->perspectiveRemovePixelPerCell       = 8;
+    params_->markerBorderBits                      = 2;
+    params_->cornerRefinementMethod                = cv::aruco::CORNER_REFINE_APRILTAG;
+    params_->adaptiveThreshConstant                = 7.0;
+    params_->minCornerDistanceRate                 = 0.02;
+    params_->minDistanceToBorder                   = 3;
+    params_->minMarkerPerimeterRate                = 0.02;
+    params_->maxMarkerPerimeterRate                = 4.0;
+    params_->polygonalApproxAccuracyRate           = 0.03;
+    params_->perspectiveRemovePixelPerCell         = 8;
     params_->perspectiveRemoveIgnoredMarginPerCell = 0.13;
-    params_->maxErroneousBitsInBorderRate        = 0.5;
-    params_->errorCorrectionRate                 = 0.6;
-    params_->detectInvertedMarker                = true;
-    params_->cornerRefinementWinSize             = 5;
-    params_->cornerRefinementMaxIterations       = 50;
-    params_->cornerRefinementMinAccuracy         = 0.01;
-    RCLCPP_INFO(logger, "Applied AprilTag profile: borderBits=2 cornerRefine=APRILTAG");
+    params_->maxErroneousBitsInBorderRate          = 0.5;
+    params_->errorCorrectionRate                   = 0.6;
+    params_->detectInvertedMarker                  = true;
+    params_->cornerRefinementWinSize               = 5;
+    params_->cornerRefinementMaxIterations         = 50;
+    params_->cornerRefinementMinAccuracy           = 0.01;
+    RCLCPP_INFO(logger, "Detector profile: AprilTag | borderBits=2 cornerRefine=APRILTAG");
   } else if (isMIPDict(dict_name)) {
-    params_->markerBorderBits                    = 1;
-    params_->cornerRefinementMethod              = cv::aruco::CORNER_REFINE_SUBPIX;
-    params_->minMarkerPerimeterRate              = 0.02;
-    params_->maxMarkerPerimeterRate              = 4.0;
-    params_->maxErroneousBitsInBorderRate        = 0.5;
-    params_->errorCorrectionRate                 = 0.8;
-    params_->detectInvertedMarker                = true;
-    params_->cornerRefinementMaxIterations       = 50;
-    params_->cornerRefinementMinAccuracy         = 0.01;
-    RCLCPP_INFO(logger, "Applied MIP profile: borderBits=1 errorRate=0.8");
+    params_->markerBorderBits                      = 1;
+    params_->cornerRefinementMethod                = cv::aruco::CORNER_REFINE_SUBPIX;
+    params_->minMarkerPerimeterRate                = 0.02;
+    params_->maxMarkerPerimeterRate                = 4.0;
+    params_->maxErroneousBitsInBorderRate          = 0.5;
+    params_->errorCorrectionRate                   = 0.8;
+    params_->detectInvertedMarker                  = true;
+    params_->cornerRefinementMaxIterations         = 50;
+    params_->cornerRefinementMinAccuracy           = 0.01;
+    RCLCPP_INFO(logger, "Detector profile: MIP | borderBits=1 errorRate=0.8");
+  } else if (is7x7Dict(dict_name)) {
+    // 7×7 grid needs higher resolution per cell and wider adaptive threshold
+    // windows to reliably read the denser bit pattern, especially at range.
+    params_->markerBorderBits                      = 1;
+    params_->perspectiveRemovePixelPerCell         = 10;
+    params_->perspectiveRemoveIgnoredMarginPerCell = 0.10;
+    params_->adaptiveThreshWinSizeMin              = 3;
+    params_->adaptiveThreshWinSizeMax              = 33;
+    params_->adaptiveThreshWinSizeStep             = 10;
+    params_->adaptiveThreshConstant                = 7.0;
+    params_->minMarkerPerimeterRate                = 0.015;
+    params_->maxMarkerPerimeterRate                = 4.0;
+    params_->polygonalApproxAccuracyRate           = 0.03;
+    params_->minCornerDistanceRate                 = 0.05;
+    params_->minDistanceToBorder                   = 3;
+    params_->maxErroneousBitsInBorderRate          = 0.35;
+    params_->errorCorrectionRate                   = 0.6;
+    params_->detectInvertedMarker                  = true;
+    // CORNER_REFINE_CONTOUR is robust for 7x7 and avoids the SUBPIX
+    // stack-overflow / memory-corruption seen in OpenCV 4.x with tight
+    // minAccuracy + high maxIterations on dense bit patterns.
+    params_->cornerRefinementMethod                = cv::aruco::CORNER_REFINE_CONTOUR;
+    params_->cornerRefinementWinSize               = 5;
+    params_->cornerRefinementMaxIterations         = 30;
+    params_->cornerRefinementMinAccuracy           = 0.1;
+    RCLCPP_INFO(logger,
+      "Detector profile: 7×7 | pixPerCell=10 margin=0.10 threshMax=33 cornerRefine=CONTOUR");
   } else {
-    RCLCPP_DEBUG(logger, "Using standard ArUco profile for %s", dict_name.c_str());
+    RCLCPP_DEBUG(logger, "Detector profile: standard ArUco | dict=%s", dict_name.c_str());
   }
 }
 }

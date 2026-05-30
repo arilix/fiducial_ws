@@ -1,0 +1,39 @@
+<!--
+  all_in_one.launch.xml
+  Single-node mode: aruco_node handles camera capture internally.
+  No capture_node required — one executable, one launch.
+
+  Usage:
+    ros2 launch fiducial_detector all_in_one.launch.xml
+    ros2 launch fiducial_detector all_in_one.launch.xml dictionary_type:=DICT_7X7_50
+    ros2 launch fiducial_detector all_in_one.launch.xml capture_device_path:=/dev/video4
+    ros2 launch fiducial_detector all_in_one.launch.xml show_window:=true
+-->
+<launch>
+  <arg name="dictionary_type"     default="DICT_7X7_50"    description="ArUco dictionary"/>
+  <arg name="detection_mode"      default="SINGLE"         description="SINGLE|AUTO|MULTI|BENCHMARK"/>
+  <arg name="marker_size"         default="0.05"           description="Marker side length in meters"/>
+  <arg name="capture_device_id"   default="0"              description="/dev/videoN index"/>
+  <arg name="capture_device_path" default=""               description="Override device path e.g. /dev/video4"/>
+  <arg name="capture_width"       default="640"/>
+  <arg name="capture_height"      default="480"/>
+  <arg name="capture_fps"         default="30.0"/>
+  <arg name="show_window"         default="false"          description="Show OpenCV window (requires display)"/>
+  <arg name="enable_charuco"      default="false"/>
+
+  <node pkg="fiducial_detector" exec="aruco_node"
+        name="aruco_node" output="screen">
+    <param from="$(find-pkg-share fiducial_detector)/config/detector.yaml"/>
+    <param name="dictionary_type"     value="$(var dictionary_type)"/>
+    <param name="detection_mode"      value="$(var detection_mode)"/>
+    <param name="marker_size"         value="$(var marker_size)"/>
+    <param name="capture_internal"    value="true"/>
+    <param name="capture_device_id"   value="$(var capture_device_id)"/>
+    <param name="capture_device_path" value="$(var capture_device_path)"/>
+    <param name="capture_width"       value="$(var capture_width)"/>
+    <param name="capture_height"      value="$(var capture_height)"/>
+    <param name="capture_fps"         value="$(var capture_fps)"/>
+    <param name="show_window"         value="$(var show_window)"/>
+    <param name="enable_charuco"      value="$(var enable_charuco)"/>
+  </node>
+</launch>

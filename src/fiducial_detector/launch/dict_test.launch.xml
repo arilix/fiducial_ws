@@ -1,0 +1,19 @@
+<!--
+  dict_test.launch.xml
+  Run dict_test_node to generate, detect, and validate all marker IDs
+  for a given dictionary (or ALL dictionaries) without requiring a camera.
+
+  Usage:
+    ros2 launch fiducial_detector dict_test.launch.xml
+    ros2 launch fiducial_detector dict_test.launch.xml dict_name:=DICT_7X7_50
+    ros2 launch fiducial_detector dict_test.launch.xml dict_name:=ALL
+    ros2 launch fiducial_detector dict_test.launch.xml dict_name:=DICT_7X7_100 output_dir:=/tmp/markers
+-->
+<launch>
+  <arg name="dict_name"  default="DICT_7X7_50"       description="Dictionary name or ALL"/>
+  <arg name="output_dir" default="/tmp/aruco_dict_test" description="Output directory for generated marker PNGs"/>
+
+  <node pkg="fiducial_detector" exec="dict_test_node"
+        name="dict_test_node" output="screen"
+        args="$(var dict_name) $(var output_dir)"/>
+</launch>

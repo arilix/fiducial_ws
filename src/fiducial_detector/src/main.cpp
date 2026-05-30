@@ -3,12 +3,14 @@
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  auto executor = std::make_shared<rclcpp::executors::MultiThreadedExecutor>(
-    rclcpp::ExecutorOptions(), 4);
+  // Use SingleThreadedExecutor: the capture_thread_ handles concurrent image
+  // acquisition; ROS callbacks (imageCallback, timers) must be serialized to
+  // prevent race conditions in cv::aruco::detectMarkers and autoDetect.
+  auto executor = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
   auto node = std::make_shared<fiducial_detector::FiducialDetector>();
   executor->add_node(node);
   RCLCPP_INFO(node->get_logger(),
-    "Spinning on MultiThreadedExecutor (4 threads)");
+    "Spinning on SingleThreadedExecutor");
   std::thread spin_thread([&executor]() {
     executor->spin();
   });

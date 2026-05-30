@@ -79,7 +79,10 @@ private:
   void renderAnnotations(cv::Mat& frame, const DetectionResult& r, bool locked);
   void publishAll(const DetectionResult& r, const cv::Mat& ann, const rclcpp::Time& stamp);
   void publishDebugImage(const cv::Mat& img, rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr& pub, const rclcpp::Time& stamp);
+  void logDetectedMarkers(const DetectionResult& r) const;
   void reconnectCamera();
+  void initInternalCapture();
+  void loopInternalCapture();
   cv::Point2f computeCenter(const std::vector<cv::Point2f>& c);
   cv::Mat preprocessFrame(const cv::Mat& gray);
   void enqueueDisplay(const cv::Mat& frame);
@@ -97,7 +100,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr           pub_dict_score_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr           pub_det_stats_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr           pub_benchmark_;
-  rclcpp::TimerBase::SharedPtr fps_timer_, watchdog_timer_;
+  rclcpp::TimerBase::SharedPtr fps_timer_, watchdog_timer_, capture_start_timer_;
   // ── Detection Parameters ─────────────────────────────────────────────────
   double      marker_size_{0.05};
   std::string camera_topic_{"/camera/image_raw"};
@@ -106,10 +109,10 @@ private:
   double      smoothing_alpha_{0.4};
   int         max_missed_frames_{5};
   // ── Feature Flags ────────────────────────────────────────────────────────
-  bool        enable_charuco_{true};
+  bool        enable_charuco_{false};
   bool        enable_gridboard_{false};
   bool        enable_diamond_{false};
-  bool        show_window_{true};
+  bool        show_window_{false};
   bool        show_rejected_{true};
   bool        show_corner_labels_{true};
   bool        show_orientation_arrow_{true};
@@ -166,12 +169,24 @@ private:
   std::atomic<bool> reconnect_pending_{false};
   rclcpp::Time last_frame_time_;
   uint64_t     frame_count_{0};
+  mutable std::mutex callback_mutex_;   // serialize imageCallback (detectMarkers not re-entrant)
   std::atomic<bool> show_cells_window_{false};
   std::atomic<bool> show_thresh_window_{false};
   std::atomic<bool> show_contour_window_{false};
   std::atomic<bool> show_rejected_window_{false};
   std::mutex        debug_mutex_;
   MarkerDebugImages last_debug_;
+  // ── Internal capture (alternative to capture_node) ──────────────────────
+  bool             capture_internal_{false};
+  int              capture_device_id_{0};
+  std::string      capture_device_path_{};
+  int              capture_width_{640};
+  int              capture_height_{480};
+  double           capture_fps_{30.0};
+  cv::VideoCapture cap_;
+  std::thread      capture_thread_;
+  std::atomic<bool> capture_running_{false};
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_internal_cam_;
   // ── Display Thread ───────────────────────────────────────────────────────
   cv::Mat                 display_frame_;
   std::mutex              display_mutex_;

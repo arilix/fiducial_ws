@@ -35,6 +35,7 @@ set(COMMON_SRCS
   src/apriltag_backend.cpp
   src/hybrid_detector.cpp
   src/display_utils.cpp
+  src/marker_generator.cpp
 )
 add_executable(aruco_node
   src/main.cpp
@@ -88,7 +89,20 @@ else()
   message(STATUS "capture_node: RealSense support OFF (rebuild with -DUSE_REALSENSE=ON to enable)")
 endif()
 
-install(TARGETS aruco_node calibration_node capture_node DESTINATION lib/${PROJECT_NAME})
+# ── dict_test_node (standalone CLI: generate + detect + verify all marker IDs) ─
+add_executable(dict_test_node
+  src/dict_test_main.cpp
+  src/marker_generator.cpp
+  src/dictionary_manager.cpp
+)
+target_include_directories(dict_test_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(dict_test_node ${OpenCV_LIBS})
+
+install(TARGETS aruco_node calibration_node capture_node dict_test_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include/)
 install(DIRECTORY launch/  DESTINATION share/${PROJECT_NAME}/launch)
 install(DIRECTORY config/  DESTINATION share/${PROJECT_NAME}/config)

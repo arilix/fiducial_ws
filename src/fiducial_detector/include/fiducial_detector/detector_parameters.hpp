@@ -19,6 +19,7 @@ public:
   static cv::Ptr<cv::aruco::Dictionary> makeDict(const std::string& name);
   static bool isAprilTagDict(const std::string& name);
   static bool isMIPDict(const std::string& name);
+  static bool is7x7Dict(const std::string& name);
   static int borderBitsForDict(const std::string& name);
 private:
   cv::Ptr<cv::aruco::DetectorParameters> params_;

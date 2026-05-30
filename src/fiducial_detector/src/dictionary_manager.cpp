@@ -28,15 +28,11 @@ static const std::map<std::string, int> GLOBAL_DICT_MAP = {
   {"DICT_APRILTAG_36h11",  cv::aruco::DICT_APRILTAG_36h11},
 };
 const std::vector<std::string> DictionaryManager::AUTO_SUBSET = {
-  // 4×4 family — fast, low density
   "DICT_4X4_50",  "DICT_4X4_100",
-  // 5×5 family — medium density, common in competition markers
   "DICT_5X5_50",  "DICT_5X5_100",
-  // 6×6 family — higher density, likely for KRTI 2026 (chev.me/arucogen)
   "DICT_6X6_50",  "DICT_6X6_100",  "DICT_6X6_250",
-  // Original ArUco (legacy)
+  "DICT_7X7_50",  "DICT_7X7_100",
   "DICT_ARUCO_ORIGINAL",
-  // AprilTag via OpenCV wrapper
   "DICT_APRILTAG_36h11",
 };
 const std::map<std::string, int>& DictionaryManager::getDictMap() {
@@ -144,12 +140,44 @@ DictionaryScore DictionaryManager::lastScore(const std::string& name) const {
 bool DictionaryManager::validateDictionary(const std::string& name) const {
   auto it = dicts_.find(name);
   if (it == dicts_.end()) return false;
-  const auto& info = it->second;
-  if (!info.dict) return false;
-  if (info.dict->markerSize <= 0) return false;
-  if (info.dict->bytesList.empty()) return false;
-  if (info.dict->bytesList.rows <= 0) return false;
+  const auto& inf = it->second;
+  if (!inf.dict) return false;
+  if (inf.dict->markerSize <= 0) return false;
+  if (inf.dict->bytesList.empty()) return false;
+  if (inf.dict->bytesList.rows <= 0) return false;
+  if (inf.dict->bytesList.rows != inf.total_markers) return false;
   return true;
+}
+void DictionaryManager::printStartupValidation(const std::string& name) const {
+  auto it = dicts_.find(name);
+  const std::string sep(54, '=');
+  const std::string dash(54, '-');
+  std::printf("\n%s\n", sep.c_str());
+  std::printf("  DICTIONARY STARTUP VALIDATION\n");
+  std::printf("%s\n", dash.c_str());
+  if (it == dicts_.end()) {
+    std::printf("  Status : FAILED — unknown dictionary: %s\n", name.c_str());
+    std::printf("%s\n\n", sep.c_str());
+    return;
+  }
+  const auto& inf = it->second;
+  std::printf("  Dictionary   : %s\n", inf.name.c_str());
+  std::printf("  Family       : %s\n", inf.family.c_str());
+  std::printf("  MarkerSize   : %d bits\n", inf.marker_bits);
+  std::printf("  TotalMarkers : %d\n", inf.total_markers);
+  std::printf("  BorderBits   : %d\n", inf.border_bits);
+  if (!inf.dict || inf.dict->bytesList.empty()) {
+    std::printf("  BytesList    : EMPTY — dictionary not loaded!\n");
+    std::printf("  Status       : FAILED ✗\n");
+  } else if (inf.dict->bytesList.rows != inf.total_markers) {
+    std::printf("  BytesList    : MISMATCH (got %d rows, expected %d)\n",
+      inf.dict->bytesList.rows, inf.total_markers);
+    std::printf("  Status       : FAILED ✗\n");
+  } else {
+    std::printf("  BytesList    : OK (%d rows)\n", inf.dict->bytesList.rows);
+    std::printf("  Status       : VALID ✓\n");
+  }
+  std::printf("%s\n\n", sep.c_str());
 }
 DictDetectionResult DictionaryManager::detectWith(
   const std::string& dict_name,
@@ -165,6 +193,10 @@ DictDetectionResult DictionaryManager::detectWith(
   dp->markerBorderBits = it->second.border_bits;
   if (it->second.family == "apriltag") {
     dp->cornerRefinementMethod = cv::aruco::CORNER_REFINE_APRILTAG;
+  } else if (it->second.family == "7x7") {
+    dp->cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
+    dp->perspectiveRemovePixelPerCell = 10;
+    dp->perspectiveRemoveIgnoredMarginPerCell = 0.10;
   }
 
   auto t0 = std::chrono::steady_clock::now();

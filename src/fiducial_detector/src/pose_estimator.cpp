@@ -33,18 +33,9 @@ PoseResult PoseEstimator::estimate(int id, const std::vector<cv::Point2f>& corne
   if (corners.size() != 4 || K_.empty()) return result;
   auto obj_pts = makeObjectPoints();
   cv::Vec3d rvec, tvec;
-  std::vector<std::vector<cv::Point2f>> corners_wrap{corners};
-  std::vector<cv::Vec3d> rvecs, tvecs;
-  cv::aruco::estimatePoseSingleMarkers(
-    corners_wrap, static_cast<float>(marker_size_), K_, D_, rvecs, tvecs);
-  if (rvecs.empty()) {
-    bool ok = cv::solvePnP(obj_pts, corners, K_, D_, rvec, tvec,
-                           false, cv::SOLVEPNP_IPPE_SQUARE);
-    if (!ok) return result;
-  } else {
-    rvec = rvecs[0];
-    tvec = tvecs[0];
-  }
+  bool ok = cv::solvePnP(obj_pts, corners, K_, D_, rvec, tvec,
+                         false, cv::SOLVEPNP_IPPE_SQUARE);
+  if (!ok) return result;
   applySmoothing(id, rvec, tvec);
   result.rvec     = rvec;
   result.tvec     = tvec;
