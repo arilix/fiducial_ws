@@ -2,6 +2,7 @@
 #include "utils/marker_decoder.h"
 #include <opencv2/imgproc.hpp>
 #include <tf2/LinearMath/Quaternion.hpp>
+#include <limits>
 
 namespace fiducial_detector {
 
@@ -251,11 +252,35 @@ void FiducialDetector::imageCallback(
 
     GateError gate_err;
     if (!result.markers.empty()) {
-        const auto& primary = result.markers[0];
-        float dist = primary.pose.valid
-            ? static_cast<float>(primary.pose.distance) : 0.f;
+        // Hitung centroid dari SEMUA marker yang terdeteksi.
+        // Untuk ArUco board/grid tergabung (misal 2x2 atau 3x3),
+        // ini memberikan titik tengah gate secara keseluruhan.
+        cv::Point2f group_center(0.f, 0.f);
+        float       group_dist  = 0.f;
+        int         valid_pose  = 0;
+        for (const auto& m : result.markers) {
+            group_center += m.center;
+            if (m.pose.valid) {
+                group_dist += static_cast<float>(m.pose.distance);
+                ++valid_pose;
+            }
+        }
+        float n = static_cast<float>(result.markers.size());
+        group_center *= (1.f / n);
+        if (valid_pose > 0) group_dist /= static_cast<float>(valid_pose);
+
+        // Gunakan ID marker terdekat (jarak terkecil) sebagai referensi tracking
+        int primary_id = result.markers[0].id;
+        float best_dist = std::numeric_limits<float>::max();
+        for (const auto& m : result.markers) {
+            if (m.pose.valid && static_cast<float>(m.pose.distance) < best_dist) {
+                best_dist  = static_cast<float>(m.pose.distance);
+                primary_id = m.id;
+            }
+        }
+
         gate_err = gate_alignment_->update(
-            primary.center, result.frame_size, dist, primary.id);
+            group_center, result.frame_size, group_dist, primary_id);
     } else {
         gate_err = gate_alignment_->update(
             {0.f, 0.f}, result.frame_size, 0.f, -1);
@@ -419,33 +444,29 @@ void FiducialDetector::logDetectedMarkers(
     float  fps_now = fps_monitor_.getFps();
     double lat_ms  = fps_monitor_.getLatencyMs();
 
+    // Header ringkas: jumlah marker dan FPS
+    std::printf("\n[Board] %zu marker(s) terdeteksi | FPS=%.1f | Lat=%.1fms\n",
+        result.markers.size(), fps_now, lat_ms);
+
     for (const auto& m : result.markers) {
         float conf_pct = m.confidence.aggregate * 100.f;
         std::printf(
-            "\n[Detector]\n"
-            "  Family=DICT_7X7_50  ID=%d  Confidence=%.0f%%  FPS=%.1f  Latency=%.1fms\n",
-            m.id, conf_pct, fps_now, lat_ms);
+            "  [ID=%d] Conf=%.0f%%",
+            m.id, conf_pct);
         if (m.pose.valid) {
             std::printf(
-                "[Pose]\n"
-                "  XYZ=(%.3f, %.3f, %.3f)m  Distance=%.3fm\n",
+                "  XYZ=(%.3f, %.3f, %.3f)m  Dist=%.3fm",
                 m.pose.tvec[0], m.pose.tvec[1], m.pose.tvec[2],
                 m.pose.distance);
         }
+        std::printf("\n");
     }
 
-    // Print state machine + alignment error once per frame (for primary marker)
+    // State machine + centroid error
     std::printf(
-        "[Tracking]\n"
-        "  State=%s\n"
-        "[Alignment]\n"
-        "  State=%s  ErrorX=%+.0f  ErrorY=%+.0f\n"
-        "[Gate]\n"
-        "  State=%s  Distance=%.3fm\n",
-        gate_err.stateName().c_str(),
+        "[Gate-Centroid] State=%-12s  ErrorX=%+.0f  ErrorY=%+.0f  Dist=%.3fm\n",
         gate_err.stateName().c_str(),
         gate_err.error_x, gate_err.error_y,
-        gate_err.stateName().c_str(),
         gate_err.distance);
     std::fflush(stdout);
 }
