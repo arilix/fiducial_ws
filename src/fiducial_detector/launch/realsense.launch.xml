@@ -1,0 +1,35 @@
+<!--
+  realsense.launch.xml — Intel RealSense + DICT_7X7_50 Gate Centering
+
+  Usage:
+    ros2 launch fiducial_detector realsense.launch.xml
+    ros2 launch fiducial_detector realsense.launch.xml marker_size:=0.15
+    ros2 launch fiducial_detector realsense.launch.xml width:=1280 height:=720 fps_limit:=30
+-->
+<launch>
+  <arg name="width"       default="640"/>
+  <arg name="height"      default="480"/>
+  <arg name="fps_limit"   default="30"   description="Camera FPS (integer)"/>
+  <arg name="marker_size" default="0.05" description="Physical marker size in metres"/>
+  <arg name="show_window" default="false"/>
+  <arg name="cuda"        default="false" description="true/false — GPU CLAHE/blur/sharpen (requires USE_CUDA=ON build)"/>
+
+  <!-- Intel RealSense ROS2 driver — publishes /camera/camera/color/image_raw -->
+  <node pkg="realsense2_camera" exec="realsense2_camera_node"
+        namespace="camera" output="screen">
+    <param name="camera_name"              value="camera"/>
+    <param name="enable_color"             value="true"/>
+    <param name="enable_depth"             value="false"/>
+    <param name="enable_infra"             value="false"/>
+    <param name="rgb_camera.color_profile" value="$(var width),$(var height),$(var fps_limit)"/>
+  </node>
+
+  <!-- DICT_7X7_50 Gate Centering Node -->
+  <node pkg="fiducial_detector" exec="aruco_node" name="aruco_node" output="screen">
+    <param from="$(find-pkg-share fiducial_detector)/config/detector.yaml"/>
+    <param name="camera_topic" value="/camera/camera/color/image_raw"/>
+    <param name="marker_size"  value="$(var marker_size)"/>
+    <param name="show_window"  value="$(var show_window)"/>
+    <param name="cuda"         value="$(var cuda)"/>
+  </node>
+</launch>

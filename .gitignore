@@ -1,0 +1,44 @@
+# ── ROS 2 colcon build artifacts ────────────────────────────────────────────
+build/
+install/
+log/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ── C++ build artifacts ───────────────────────────────────────────────────────
+*.o
+*.a
+*.so
+*.so.*
+
+# ── CMake ────────────────────────────────────────────────────────────────────
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!**/CMakeLists.txt
+
+# ── Editor / IDE ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ── Zip / archive ─────────────────────────────────────────────────────────────
+*.zip
+*.tar.gz
+*.tar.bz2
+
+# ── ML Model / dataset ────────────────────────────────────────────────────────
+../../Model/
+../../runs/
+
+# ── Misc scripts di root workspace ────────────────────────────────────────────
+strip_comments.py

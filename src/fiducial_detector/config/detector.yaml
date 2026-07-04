@@ -1,0 +1,79 @@
+# ═══════════════════════════════════════════════════
+# DICT_7X7_50 Gate Centering System — Configuration
+# ═══════════════════════════════════════════════════
+aruco_node:
+  ros__parameters:
+    # ── Core ──────────────────────────────────────
+    marker_size:          0.05          # physical marker size in metres
+
+    camera_topic:         "/camera/image_raw"
+
+    # ── Display ───────────────────────────────────
+    show_window:          false         # set true for desktop testing
+    show_rejected:        true
+    show_corner_labels:   true
+    show_orientation_arrow: true
+    show_confidence:      true
+
+    # ── Gate Alignment ────────────────────────────
+    alignment_tolerance:  50            # pixels for ALIGNED state
+    alignment_stable_frames: 10        # consecutive frames for GATE_READY
+
+    # ── Tracking ──────────────────────────────────
+    smoothing_alpha:      0.4           # EMA alpha for pose smoothing (0=freeze, 1=raw)
+    max_missed_frames:    5             # frames before SEARCH state reset
+
+    # ── Camera Intrinsics ─────────────────────────
+    camera_matrix:
+      - 640.0
+      - 0.0
+      - 320.0
+      - 0.0
+      - 640.0
+      - 240.0
+      - 0.0
+      - 0.0
+      - 1.0
+    dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # ── Internal Camera Capture ───────────────────
+    capture_internal:     false
+    capture_device_id:    0
+    capture_device_path:  ""
+    capture_width:        640
+    capture_height:       480
+    capture_fps:          30.0
+
+    # ── DICT_7X7_50 Detector Parameters ──────────
+    # Perspective normalization for 7×7 grid resolution
+    perspectiveRemovePixelPerCell:          10
+    perspectiveRemoveIgnoredMarginPerCell:  0.10
+    markerBorderBits:                       1
+
+    # Wide adaptive threshold window for small/distant markers
+    adaptiveThreshWinSizeMin:    3
+    adaptiveThreshWinSizeMax:    33
+    adaptiveThreshWinSizeStep:   10
+    adaptiveThreshConstant:      7.0
+
+    minMarkerPerimeterRate:      0.015
+    maxMarkerPerimeterRate:      4.0
+    polygonalApproxAccuracyRate: 0.03
+    minCornerDistanceRate:       0.05
+    minDistanceToBorder:         3
+    minMarkerDistanceRate:       0.05
+    maxErroneousBitsInBorderRate: 0.35
+    errorCorrectionRate:          0.6
+    detectInvertedMarker:         true
+
+    # Subpixel corner refinement for stable multi-pose estimation
+    cornerRefinementMethod:       1    # 1=SUBPIX
+    cornerRefinementWinSize:      5
+    cornerRefinementMaxIterations: 50
+    cornerRefinementMinAccuracy:   0.01
+
+    # ── Preprocessing ────────────────────────────
+    enable_clahe:             true
+    clahe_clip_limit:         2.0
+    enable_sharpen:           false
+    enable_blur:              false
