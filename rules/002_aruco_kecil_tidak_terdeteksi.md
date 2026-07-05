@@ -401,11 +401,21 @@ Semua solusi A–E sudah diimplementasikan di `aruco.cpp`:
 | Tab scale | TAB_SCALE adaptive: 6x (<40px) / 5x (<70px) / 4x (sisanya) | Sebelumnya fixed 4x |
 | Tab detection | Tambah **inverted binary pass** (3 versi: sharp→binary→inverted) | Sebelumnya hanya 2 versi |
 | Predictive top/bottom-tab crop | Crop prediktif di atas dan bawah marker besar | Menangani board real ketika tab kecil berada di atas atau bawah marker besar |
-| Predictive ROI variation | Size ratio `0.25/0.30/0.35/0.40`, gap `-0.03/0.02/0.07`, offset X `-0.08/0/0.08`, max 96 ROI | Lebih mudah kena saat board miring/posisi tab sedikit meleset tanpa drop FPS berlebihan |
+| Predictive ROI variation | Size ratio `0.25/0.30/0.35/0.40`, gap `-0.03/0.02/0.07`, offset X `-0.08/0/0.08`, max 36 ROI tiap rescue frame | Lebih mudah kena saat board miring/posisi tab sedikit meleset tanpa drop FPS berlebihan |
 | Predictive scale | Scale crop kecil `5x–7x` + sharpen + binary + inverted | Menaikkan resolusi sampling untuk 7x7 grid |
 | Stabilizer key | Tracking dibedakan `ID:big` dan `ID:small` | Mencegah marker besar dan kecil dengan ID sama saling overwrite/flicker |
 | Small marker hold | Small marker di-hold 14 frame; big marker 7 frame | Mengurangi flicker ketika tab kecil hanya terbaca intermittent |
 | Runtime log | `Predictive small-tab detected ID=...` | Indikator terminal bahwa rescue crop berhasil |
+| FPS tuning | Semua ROI rescue kecil jalan tiap 3 frame; predictive ROI max 36; full-frame upscale hanya saat tidak ada marker dan tiap 10 frame | Mengurangi latency dari rescue berat sambil tetap dibantu hold 14 frame |
+
+**Catatan performa:** jika log menunjukkan latency `66–132ms`, bottleneck ada di deteksi CPU, bukan di RealSense. Penyebab utamanya adalah full-frame upscale dan banyak ROI rescue. Versi terbaru membatasi rescue berat agar FPS lebih tinggi.
+
+**Catatan RealSense:** jika startup menulis `Given value, 1280,720,30 is invalid` lalu `Open profile: Color ... 640x480 ... FPS: 15`, maka input kamera memang hanya 15 FPS. Untuk mengejar >20 FPS, gunakan profil yang didukung seperti:
+
+```bash
+ros2 launch fiducial_detector realsense.launch.xml \
+  width:=640 height:=480 fps_limit:=30 show_window:=true
+```
 
 **Build status:** ✅ `colcon build` berhasil (2026-07-05)
 

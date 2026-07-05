@@ -231,17 +231,17 @@ rs-enumerate-devices | head -5  # verifikasi kamera terdeteksi
 ### Contoh Perintah
 
 ```bash
-# Default: DICT_7X7_50, 1280x720 @ 30fps, tanpa GUI
+# Default: DICT_7X7_50, 640x480 @ 30fps, tanpa GUI
 ros2 launch fiducial_detector realsense.launch.xml
 
 # Dengan preview window
 ros2 launch fiducial_detector realsense.launch.xml show_window:=true
 
-# Resolusi tinggi eksplisit
+# FPS mode: profil 30 FPS yang umum didukung RealSense
 ros2 launch fiducial_detector realsense.launch.xml \
-  width:=1280 height:=720 fps_limit:=30
+  width:=640 height:=480 fps_limit:=30 show_window:=true
 
-# Marker kecil lebih stabil: turunkan FPS agar exposure lebih longgar
+# Marker kecil/resolusi tinggi: gunakan hanya jika device mendukung profil ini
 ros2 launch fiducial_detector realsense.launch.xml \
   width:=1280 height:=720 fps_limit:=15 show_window:=true
 
@@ -258,7 +258,7 @@ ros2 launch fiducial_detector realsense.launch.xml \
 
 | Argument | Default | Keterangan |
 |---|---|---|
-| `width` / `height` | `1280`/`720` | Resolusi color stream |
+| `width` / `height` | `640`/`480` | Resolusi color stream |
 | `fps_limit` | `30` | FPS kamera (harus integer) |
 | `marker_size` | `0.05` | Ukuran fisik marker (metre) |
 | `show_window` | `false` | Tampilkan jendela OpenCV |
@@ -281,7 +281,9 @@ Jika log tersebut hanya muncul saat board dekat kamera, penyebab umumnya adalah:
 - exposure terlalu pendek akibat FPS tinggi,
 - cahaya kurang atau glare pada kertas.
 
-Solusi praktis: gunakan `1280x720`, coba `fps_limit:=15` atau `fps_limit:=10`, dan tambah cahaya terang yang menyebar.
+Jika log RealSense menulis `Given value ... is invalid` lalu fallback ke `640x480x15`, maka kamera memang tidak memakai profil yang diminta dan output tidak akan bisa tembus 20 FPS. Gunakan profil valid, misalnya `width:=640 height:=480 fps_limit:=30`, lalu cek log `Open profile`.
+
+Solusi praktis: untuk FPS pakai `640x480@30`; untuk marker kecil pakai `1280x720@15` hanya jika device mendukung dan kamu rela FPS lebih rendah.
 
 ---
 
@@ -465,7 +467,8 @@ enable_blur:          false
 | `source install/setup.bash` not found | Belum pernah build | Jalankan `colcon build` terlebih dahulu |
 | FPS rendah | Resolusi tinggi / show_window aktif | `show_window:=false`, kurangi resolusi |
 | Deteksi tidak stabil | Pencahayaan buruk / tolerance kecil | Naikkan `alignment_tolerance`, tambah lampu |
-| Marker kecil harus dekat | Resolusi piksel kecil kurang / blur / exposure | RealSense `1280x720`, coba `fps_limit:=15` atau `10`, tambah cahaya menyebar |
+| RealSense mentok 15 FPS | Profile launch invalid, driver fallback `640x480x15` | Pakai `width:=640 height:=480 fps_limit:=30`; cek log `Open profile` |
+| Marker kecil harus dekat | Resolusi piksel kecil kurang / blur / exposure | Pakai resolusi tinggi jika didukung, atau dekatkan board dan tambah cahaya |
 | Marker kecil flicker | Small-tab rescue hanya intermittent | Cek log `Predictive small-tab detected ID=...`; stabilizer menahan small marker 14 frame |
 | `solvePnP` failed / pose tidak akurat | Intrinsik kamera placeholder | Jalankan `calibration.launch.xml` → update `detector.yaml` |
 | RealSense tidak terbuka | Build flag salah | Rebuild dengan `-DUSE_REALSENSE=ON` |

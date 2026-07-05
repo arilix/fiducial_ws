@@ -512,15 +512,16 @@ void FiducialDetector::detectAruco(const cv::Mat& gray, DetectionResult& result)
     cv::aruco::detectMarkers(gray, aruco_dict_, corners, ids, dp, rejected);
     result.rejected.insert(result.rejected.end(), rejected.begin(), rejected.end());
 
-    if (!rejected.empty()) {
+    const bool rescue_frame = (frame_count_ % 3 == 0);
+    if (rescue_frame && !rejected.empty()) {
         splitCombinedBoard(gray, corners, ids, rejected);
     }
-    if (!corners.empty()) {
+    if (rescue_frame && !corners.empty()) {
         detectTopTabMarkers(gray, corners, ids);
     }
-    if (corners.size() < 8) {
+    if (corners.empty() && frame_count_ % 10 == 0) {
         cv::Mat upscaled;
-        constexpr double FULL_SCALE = 2.0;
+        constexpr double FULL_SCALE = 1.5;
         cv::resize(gray, upscaled, cv::Size(), FULL_SCALE, FULL_SCALE, cv::INTER_CUBIC);
 
         cv::Mat blurred, sharpened;
@@ -686,7 +687,8 @@ void FiducialDetector::detectTopTabMarkers(
 
     std::vector<TabRoi> tab_rois;
     std::vector<PredictiveRoi> predictive_rois;
-    constexpr std::size_t MAX_PREDICTIVE_ROIS = 96;
+    const bool heavy_rescue_frame = (frame_count_ % 3 == 0);
+    constexpr std::size_t MAX_PREDICTIVE_ROIS = 36;
     const cv::Rect bounds(0, 0, gray.cols, gray.rows);
     const int min_big_side = std::max(24, std::min(gray.cols, gray.rows) / 14);
     const std::size_t original_count = corners.size();
@@ -737,41 +739,43 @@ void FiducialDetector::detectTopTabMarkers(
             if (!duplicate) tab_rois.push_back(candidate);
         }
 
-        const double side_rates[] = {0.25, 0.30, 0.35, 0.40};
-        const double gap_rates[] = {-0.03, 0.02, 0.07};
-        const double x_offsets[] = {-0.08, 0.00, 0.08};
-        for (double side_rate : side_rates) {
-            if (predictive_rois.size() >= MAX_PREDICTIVE_ROIS) break;
-            const int side = std::max(18, static_cast<int>(big_side * side_rate));
-            for (double x_offset : x_offsets) {
+        if (heavy_rescue_frame) {
+            const double side_rates[] = {0.25, 0.30, 0.35, 0.40};
+            const double gap_rates[] = {-0.03, 0.02, 0.07};
+            const double x_offsets[] = {-0.08, 0.00, 0.08};
+            for (double side_rate : side_rates) {
                 if (predictive_rois.size() >= MAX_PREDICTIVE_ROIS) break;
-                const int shifted_cx = cx + static_cast<int>(big_side * x_offset);
-                for (double gap_rate : gap_rates) {
+                const int side = std::max(18, static_cast<int>(big_side * side_rate));
+                for (double x_offset : x_offsets) {
                     if (predictive_rois.size() >= MAX_PREDICTIVE_ROIS) break;
-                    cv::Rect bottom_roi(
-                        shifted_cx - side / 2,
-                        bottom + static_cast<int>(big_side * gap_rate),
-                        side,
-                        side);
-                    cv::Rect top_roi(
-                        shifted_cx - side / 2,
-                        top - side - static_cast<int>(big_side * gap_rate),
-                        side,
-                        side);
+                    const int shifted_cx = cx + static_cast<int>(big_side * x_offset);
+                    for (double gap_rate : gap_rates) {
+                        if (predictive_rois.size() >= MAX_PREDICTIVE_ROIS) break;
+                        cv::Rect bottom_roi(
+                            shifted_cx - side / 2,
+                            bottom + static_cast<int>(big_side * gap_rate),
+                            side,
+                            side);
+                        cv::Rect top_roi(
+                            shifted_cx - side / 2,
+                            top - side - static_cast<int>(big_side * gap_rate),
+                            side,
+                            side);
 
-                    std::vector<cv::Rect> predicted_positions = {top_roi, bottom_roi};
-                    for (auto roi : predicted_positions) {
-                        roi &= bounds;
-                        if (roi.width < 16 || roi.height < 16) continue;
+                        std::vector<cv::Rect> predicted_positions = {top_roi, bottom_roi};
+                        for (auto roi : predicted_positions) {
+                            roi &= bounds;
+                            if (roi.width < 16 || roi.height < 16) continue;
 
-                        bool duplicate = false;
-                        for (const auto& existing : predictive_rois) {
-                            if (isSimilarRoi(existing.rect, roi)) {
-                                duplicate = true;
-                                break;
+                            bool duplicate = false;
+                            for (const auto& existing : predictive_rois) {
+                                if (isSimilarRoi(existing.rect, roi)) {
+                                    duplicate = true;
+                                    break;
+                                }
                             }
+                            if (!duplicate) predictive_rois.push_back({roi, big_side});
                         }
-                        if (!duplicate) predictive_rois.push_back({roi, big_side});
                     }
                 }
             }

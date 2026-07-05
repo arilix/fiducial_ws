@@ -17,6 +17,7 @@ Sistem tetap memakai **DICT_7X7_50 only** dan sekarang mendukung board lomba den
 - Marker kecil yang berhasil diselamatkan akan menulis log: `Predictive small-tab detected ID=...`.
 - Stabilizer membedakan track `ID:big` dan `ID:small`, sehingga marker besar dan kecil dengan ID sama tidak saling overwrite.
 - Marker kecil ditahan lebih lama (`14 frame`) untuk mengurangi flicker saat deteksi hanya muncul intermittent.
+- Rescue berat tidak dijalankan setiap frame: predictive crop berjalan berkala dan full-frame upscale hanya saat marker utama hilang, agar FPS tetap layak.
 
 Catatan fisik: marker kecil tetap butuh cukup piksel. Jika terlalu jauh, kurang cahaya, atau blur, deteksi akan lebih sulit walaupun algoritma rescue aktif.
 
@@ -217,7 +218,11 @@ ros2 launch fiducial_detector webcam.launch.xml device_id:=2
 # Pakai RealSense
 ros2 launch fiducial_detector realsense.launch.xml show_window:=true
 
-# RealSense untuk marker kecil: kurangi FPS jika exposure/blur kurang stabil
+# RealSense FPS mode: pakai profil 30 FPS yang didukung kamera
+ros2 launch fiducial_detector realsense.launch.xml \
+  show_window:=true width:=640 height:=480 fps_limit:=30
+
+# RealSense untuk marker kecil: pakai resolusi tinggi hanya jika profile didukung
 ros2 launch fiducial_detector realsense.launch.xml \
   show_window:=true width:=1280 height:=720 fps_limit:=15
 
@@ -463,8 +468,10 @@ Print pada ukuran fisik yang sesuai `marker_size` (contoh: `marker_size:=0.15` �
 | `source install/setup.bash` error setelah rename | Path hardcoded di `install/` | `rm -rf install/ build/` lalu `colcon build` ulang |
 | Kamera tidak buka di device lain | Install belum dilakukan | Install semua prerequisite → rebuild dari awal |
 | FPS rendah | `show_window:=true` berat | `show_window:=false`, kurangi resolusi |
+| FPS turun ke 10–15 | Small-marker rescue terlalu berat / full-frame upscale aktif | Versi terbaru menjalankan rescue berat berkala; kalau masih berat pakai `fps_limit:=15` atau `show_window:=false` |
 | Deteksi tidak stabil | Lighting buruk / tolerance kecil | Naikkan `alignment_tolerance`, cek pencahayaan |
-| Marker kecil hanya terbaca dekat | Piksel marker kecil terlalu sedikit / blur / exposure | Pakai `1280x720`, coba `fps_limit:=15` atau `10`, tambah cahaya menyebar |
+| Marker kecil hanya terbaca dekat | Piksel marker kecil terlalu sedikit / blur / exposure | Kalau device support, pakai `1280x720@15`; kalau butuh FPS, pakai `640x480@30` dan dekatkan board |
+| RealSense FPS mentok 15 | Profile yang diminta invalid lalu fallback ke `640x480x15` | Pakai profile valid, misalnya `width:=640 height:=480 fps_limit:=30`; cek log `Open profile` |
 | Marker kecil flicker | Rescue hanya kena beberapa frame | Cek log `Predictive small-tab detected ID=...`; stabilizer menahan small marker 14 frame |
 | `solvePnP` failed | Intrinsik kamera belum dikalibrasi | Jalankan `calibration.launch.xml` |
 | RealSense tidak terbuka | Flag build salah | Rebuild dengan `-DUSE_REALSENSE=ON` |
