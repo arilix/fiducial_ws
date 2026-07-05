@@ -1,7 +1,7 @@
 # [002] ArUco Kecil Tidak Terdeteksi (Small Marker Detection Failure)
 
 **Tanggal ditemukan:** 2026-07-05  
-**Status:** ✅ Solved (Implemented 2026-07-05)  
+**Status:** ✅ Solved / Tuned (Implemented 2026-07-05, tuned live RealSense 2026-07-05)
 **Komponen terdampak:** `src/core/aruco.cpp`, `src/core/detector_parameters.cpp`  
 **Prioritas:** 🔴 KRITIS (syarat lomba: marker kecil di dalam board wajib terdeteksi)
 
@@ -87,6 +87,27 @@ marker kecil di crop = ~30px → perimeter = 120px → SEHARUSNYA cukup
 
 Tapi jika crop ROI terlalu ketat dan marker kecil terpotong di edge → GAGAL
 ```
+
+### Penyebab #6 — Marker Kecil Kehilangan Quiet Zone Saat Menempel
+
+Pada gambar `Aruco/Aruco-ketentuan.jpg`, marker kecil valid dan memakai `DICT_7X7_50`, tetapi sebagian marker kecil tidak terbaca ketika menempel ke marker besar. Penyebabnya bukan dictionary, melainkan **quiet zone putih di sisi sambungan hilang/menyatu dengan area hitam marker besar**.
+
+Solusi yang dipakai:
+- crop prediktif di sekitar tab atas/bawah marker besar,
+- padding putih buatan di sekitar crop,
+- preprocessing `equalizeHist` + sharpen + Otsu + inverted binary fallback,
+- dedupe marker berdasarkan ID dan jarak center.
+
+### Penyebab #7 — Jarak, Cahaya, dan Motion Blur
+
+Saat board jauh, marker kecil hanya punya sedikit piksel. Deteksi bisa berhasil dekat kamera tetapi sulit saat jauh karena:
+- resolusi marker kecil turun di bawah ~70 px per sisi,
+- blur dari gerakan tangan/board,
+- exposure pendek pada FPS tinggi,
+- noise karena cahaya redup,
+- glare pada kertas putih.
+
+Solusi praktis: RealSense `1280x720`, coba `fps_limit:=15` atau `10`, tambah cahaya menyebar, dan jaga board tidak terlalu miring.
 
 ---
 
@@ -227,6 +248,8 @@ Perubahan yang sudah diterapkan:
    - sharpening ringan
    - fallback Otsu binary jika grayscale gagal
 5. Ditambahkan fallback **full-frame 1.5x** hanya saat marker terdeteksi masih kurang dari 3.
+6. Ditambahkan **predictive small-tab crop** untuk tab atas dan bawah marker besar.
+7. Stabilizer menahan marker kecil lebih lama agar hasil rescue tidak flicker.
 
 Verifikasi lokal:
 
@@ -245,9 +268,10 @@ Hasil: `50/50 PASS`.
 |-------------|--------|------------|
 | `splitCombinedBoard()` (baris 539-640) | ✅ Sudah ada | ROI-based detection, upscale 2x untuk ROI <170px |
 | `detectTopTabMarkers()` (baris 642-717) | ✅ Sudah ada | Upscale 4x, cari tab di atas marker besar |
-| `stabilizeDetections()` (baris 740-781) | ✅ Sudah ada | EMA smoothing corners + hold 4 frame |
+| `stabilizeDetections()` | ✅ Sudah ada | EMA smoothing corners + hold marker kecil 14 frame |
 | `cloneDetectorParams()` (baris 12-18) | ✅ Sudah ada | Deep copy parameter untuk multi-pass |
 | `appendUniqueMarker()` (baris 55-73) | ✅ Sudah ada | Deduplikasi berdasarkan ID + jarak |
+| Predictive small-tab crop | ✅ Sudah ada | Cari tab atas/bawah dengan variasi ukuran, gap, dan offset X |
 
 ### Bagian yang Perlu Ditingkatkan
 
@@ -291,9 +315,29 @@ Ekspektasi:
 # Marker kecil akan sangat kecil di frame (~15-25px)
 ```
 
-Ekspektasi: Setidaknya marker besar terdeteksi. Marker kecil mungkin hanya terdeteksi secara intermittent — ini normal. `stabilizeDetections()` seharusnya men-hold marker selama 4 frame.
+Ekspektasi: Setidaknya marker besar terdeteksi. Marker kecil mungkin hanya terdeteksi secara intermittent — ini normal. `stabilizeDetections()` men-hold marker kecil selama 14 frame.
 
-### Test 4 — Debug Window ROI
+### Test 4 — RealSense untuk Marker Kecil
+
+```bash
+ros2 launch fiducial_detector realsense.launch.xml \
+  width:=1280 height:=720 fps_limit:=15 show_window:=true
+```
+
+Ekspektasi terminal saat rescue aktif:
+
+```text
+Predictive small-tab detected ID=...
+```
+
+Jika hanya terbaca dekat kamera, coba:
+
+```bash
+ros2 launch fiducial_detector realsense.launch.xml \
+  width:=1280 height:=720 fps_limit:=10 show_window:=true
+```
+
+### Test 5 — Debug Window ROI
 
 Untuk verifikasi bahwa ROI crop dan upscale bekerja, tambahkan debug `imshow` sementara:
 
@@ -335,7 +379,7 @@ if (show_window_) {
 
 ## 💡 Catatan dari Analisa Kode
 
-1. **`stabilizeDetections()` sudah bagus** — EMA corner smoothing (alpha=0.65) + hold 4 frame membantu marker kecil yang terdeteksi intermittent. Tapi ini hanya membantu **jika marker pernah terdeteksi** setidaknya 1 frame. Masalah utama adalah marker kecil yang **sama sekali tidak pernah terdeteksi**.
+1. **`stabilizeDetections()` sudah bagus** — EMA corner smoothing (alpha=0.55) + hold 14 frame untuk marker kecil membantu marker yang terdeteksi intermittent. Tapi ini hanya membantu **jika marker pernah terdeteksi** setidaknya 1 frame; kualitas input kamera tetap menentukan.
 
 2. **`appendUniqueMarker()` sudah benar** — Menggunakan distance-based deduplication, sehingga marker yang sama terdeteksi di multiple passes tidak terduplikasi.
 
@@ -356,7 +400,20 @@ Semua solusi A–E sudah diimplementasikan di `aruco.cpp`:
 | E — Full-frame upscale | Scale naik 1.5x → **2.0x** + sharpening + parameter lebih toleran | Error rate 0.50, correction 0.75 |
 | Tab scale | TAB_SCALE adaptive: 6x (<40px) / 5x (<70px) / 4x (sisanya) | Sebelumnya fixed 4x |
 | Tab detection | Tambah **inverted binary pass** (3 versi: sharp→binary→inverted) | Sebelumnya hanya 2 versi |
+| Predictive top/bottom-tab crop | Crop prediktif di atas dan bawah marker besar | Menangani board real ketika tab kecil berada di atas atau bawah marker besar |
+| Predictive ROI variation | Size ratio `0.25/0.30/0.35/0.40`, gap `-0.03/0.02/0.07`, offset X `-0.08/0/0.08`, max 96 ROI | Lebih mudah kena saat board miring/posisi tab sedikit meleset tanpa drop FPS berlebihan |
+| Predictive scale | Scale crop kecil `5x–7x` + sharpen + binary + inverted | Menaikkan resolusi sampling untuk 7x7 grid |
+| Stabilizer key | Tracking dibedakan `ID:big` dan `ID:small` | Mencegah marker besar dan kecil dengan ID sama saling overwrite/flicker |
+| Small marker hold | Small marker di-hold 14 frame; big marker 7 frame | Mengurangi flicker ketika tab kecil hanya terbaca intermittent |
+| Runtime log | `Predictive small-tab detected ID=...` | Indikator terminal bahwa rescue crop berhasil |
 
 **Build status:** ✅ `colcon build` berhasil (2026-07-05)
+
+**Validasi offline gambar user (2026-07-05):**
+
+```text
+Aruco/Aruco-ketentuan.jpg count 8 ids [3, 4, 2, 1, 1, 3, 4, 2]
+Aruco/Aruco-pisah.jpg      count 8 ids [3, 4, 2, 1, 2, 1, 3, 4]
+```
 
 *Log diperbarui oleh: Antigravity AI | Tanggal: 2026-07-05*

@@ -24,17 +24,38 @@ aruco_node:
     max_missed_frames:    5             # frames before SEARCH state reset
 
     # ── Camera Intrinsics ─────────────────────────
+    # GANTI NILAI INI dengan hasil kalibrasi kamera.
+    #
+    # Cara cepat (RealSense — pakai factory calibration):
+    #   ros2 topic echo /camera/camera/color/camera_info --once
+    #   Salin field 'k' (9 angka) ke camera_matrix, field 'd' ke dist_coeffs.
+    #
+    # Cara manual (chessboard):
+    #   ros2 launch fiducial_detector calibration.launch.xml \
+    #     camera_topic:=/camera/camera/color/image_raw
+    #   Tekan SPACE (≥20 frame) → [c] kalibrasi → [s] simpan
+    #   Nilai siap-paste muncul di terminal dan tersimpan di:
+    #   /tmp/realsense_calib_ros_params.yaml
+    #
+    # Format matrix 3×3 (baca kiri→kanan, baris demi baris):
+    #   [ fx,  0,  cx ]
+    #   [  0, fy,  cy ]
+    #   [  0,  0,   1 ]
+    #
     camera_matrix:
-      - 640.0
-      - 0.0
-      - 320.0
-      - 0.0
-      - 640.0
-      - 240.0
-      - 0.0
-      - 0.0
-      - 1.0
-    dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+      - 640.0    # fx  — focal length horizontal (piksel). Ganti dengan nilai kalibrasi.
+      - 0.0      # 0   — selalu 0
+      - 320.0    # cx  — principal point X (biasanya ~lebar/2)
+      - 0.0      # 0   — selalu 0
+      - 640.0    # fy  — focal length vertikal (piksel). Ganti dengan nilai kalibrasi.
+      - 240.0    # cy  — principal point Y (biasanya ~tinggi/2)
+      - 0.0      # 0   — selalu 0
+      - 0.0      # 0   — selalu 0
+      - 1.0      # 1   — selalu 1
+    #
+    # Koefisien distorsi lensa: [k1, k2, p1, p2, k3]
+    # Semua 0.0 = asumsi lensa ideal (tidak akurat). Ganti setelah kalibrasi.
+    dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]  # [k1, k2, p1, p2, k3]
 
     # ── Internal Camera Capture ───────────────────
     capture_internal:     false

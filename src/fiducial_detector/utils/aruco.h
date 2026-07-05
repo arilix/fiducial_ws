@@ -153,7 +153,7 @@ private:
         DetectedMarker marker;
         int missed_frames{0};
     };
-    std::unordered_map<int, MarkerTrack> marker_tracks_;
+    std::unordered_map<std::string, MarkerTrack> marker_tracks_;
 
     std::atomic<bool> cam_connected_{false};
     std::atomic<bool> reconnect_pending_{false};

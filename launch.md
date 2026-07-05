@@ -231,15 +231,23 @@ rs-enumerate-devices | head -5  # verifikasi kamera terdeteksi
 ### Contoh Perintah
 
 ```bash
-# Default: DICT_7X7_50, 640x480 @ 30fps, tanpa GUI
+# Default: DICT_7X7_50, 1280x720 @ 30fps, tanpa GUI
 ros2 launch fiducial_detector realsense.launch.xml
 
 # Dengan preview window
 ros2 launch fiducial_detector realsense.launch.xml show_window:=true
 
-# Resolusi tinggi
+# Resolusi tinggi eksplisit
 ros2 launch fiducial_detector realsense.launch.xml \
   width:=1280 height:=720 fps_limit:=30
+
+# Marker kecil lebih stabil: turunkan FPS agar exposure lebih longgar
+ros2 launch fiducial_detector realsense.launch.xml \
+  width:=1280 height:=720 fps_limit:=15 show_window:=true
+
+# Jika ruangan redup atau board masih blur, coba 10 FPS
+ros2 launch fiducial_detector realsense.launch.xml \
+  width:=1280 height:=720 fps_limit:=10 show_window:=true
 
 # Marker ukuran besar
 ros2 launch fiducial_detector realsense.launch.xml \
@@ -250,7 +258,7 @@ ros2 launch fiducial_detector realsense.launch.xml \
 
 | Argument | Default | Keterangan |
 |---|---|---|
-| `width` / `height` | `640`/`480` | Resolusi color stream |
+| `width` / `height` | `1280`/`720` | Resolusi color stream |
 | `fps_limit` | `30` | FPS kamera (harus integer) |
 | `marker_size` | `0.05` | Ukuran fisik marker (metre) |
 | `show_window` | `false` | Tampilkan jendela OpenCV |
@@ -258,6 +266,22 @@ ros2 launch fiducial_detector realsense.launch.xml \
 
 > **Camera topic:** `/camera/camera/color/image_raw`  
 > Warning IMU calibration (`ds-calib-parsers.cpp:36`) saat startup adalah normal — tidak mempengaruhi color stream.
+
+### Catatan Marker Kecil
+
+Marker kecil pada board lomba hanya stabil jika ukurannya masih cukup besar di frame. Detektor sudah memiliki **small-tab rescue** dengan log:
+
+```text
+Predictive small-tab detected ID=...
+```
+
+Jika log tersebut hanya muncul saat board dekat kamera, penyebab umumnya adalah:
+- marker kecil terlalu sedikit piksel saat jauh,
+- motion blur karena board/kamera bergerak,
+- exposure terlalu pendek akibat FPS tinggi,
+- cahaya kurang atau glare pada kertas.
+
+Solusi praktis: gunakan `1280x720`, coba `fps_limit:=15` atau `fps_limit:=10`, dan tambah cahaya terang yang menyebar.
 
 ---
 
@@ -441,6 +465,8 @@ enable_blur:          false
 | `source install/setup.bash` not found | Belum pernah build | Jalankan `colcon build` terlebih dahulu |
 | FPS rendah | Resolusi tinggi / show_window aktif | `show_window:=false`, kurangi resolusi |
 | Deteksi tidak stabil | Pencahayaan buruk / tolerance kecil | Naikkan `alignment_tolerance`, tambah lampu |
+| Marker kecil harus dekat | Resolusi piksel kecil kurang / blur / exposure | RealSense `1280x720`, coba `fps_limit:=15` atau `10`, tambah cahaya menyebar |
+| Marker kecil flicker | Small-tab rescue hanya intermittent | Cek log `Predictive small-tab detected ID=...`; stabilizer menahan small marker 14 frame |
 | `solvePnP` failed / pose tidak akurat | Intrinsik kamera placeholder | Jalankan `calibration.launch.xml` → update `detector.yaml` |
 | RealSense tidak terbuka | Build flag salah | Rebuild dengan `-DUSE_REALSENSE=ON` |
 | `cuda:=true` tapi warning | OpenCV tanpa CUDA | Rebuild `-DUSE_CUDA=ON` atau OpenCV perlu dikompilasi ulang |

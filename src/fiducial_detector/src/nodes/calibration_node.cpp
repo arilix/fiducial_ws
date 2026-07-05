@@ -2,6 +2,7 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
 #include <condition_variable>
+#include <fstream>
 namespace fiducial_detector {
 CalibrationNode::CalibrationNode(const rclcpp::NodeOptions& opts)
 : rclcpp::Node("calibration_node", opts)
@@ -142,11 +143,57 @@ bool CalibrationNode::displayLoop() {
   if      (key == ' ') capture_requested_   = true;
   else if (key == 'c') calibrate_requested_ = true;
   else if (key == 's') {
-    cv::FileStorage fs(output_yaml_, cv::FileStorage::WRITE);
-    fs << "camera_matrix"           << last_result_.camera_matrix;
-    fs << "distortion_coefficients" << last_result_.dist_coeffs;
-    fs << "reprojection_error"      << last_result_.reprojection_error;
-    RCLCPP_INFO(get_logger(), "Saved: %s", output_yaml_.c_str());
+    if (!last_result_.valid) {
+      RCLCPP_WARN(get_logger(), "No calibration result yet — press [c] first.");
+    } else {
+      // 1. OpenCV FileStorage (for tools that read it natively)
+      {
+        cv::FileStorage fs(output_yaml_, cv::FileStorage::WRITE);
+        fs << "camera_matrix"           << last_result_.camera_matrix;
+        fs << "distortion_coefficients" << last_result_.dist_coeffs;
+        fs << "reprojection_error"      << last_result_.reprojection_error;
+        fs << "n_frames_used"           << last_result_.n_frames_used;
+        fs.release();
+        RCLCPP_INFO(get_logger(), "OpenCV YAML saved: %s", output_yaml_.c_str());
+      }
+
+      // 2. ROS params format — paste-ready for detector.yaml
+      {
+        std::string ros_path = output_yaml_;
+        auto dot = ros_path.rfind('.');
+        if (dot != std::string::npos) ros_path = ros_path.substr(0, dot);
+        ros_path += "_ros_params.yaml";
+
+        const double* K = reinterpret_cast<double*>(last_result_.camera_matrix.data);
+        const double* D = reinterpret_cast<double*>(last_result_.dist_coeffs.data);
+        const int dc    = last_result_.dist_coeffs.cols * last_result_.dist_coeffs.rows;
+
+        std::ofstream f(ros_path);
+        if (f.is_open()) {
+          f << "# === Paste these values into config/detector.yaml ===\n";
+          f << "# Reprojection error: " << last_result_.reprojection_error << " px\n";
+          f << "# Frames used: " << last_result_.n_frames_used << "\n";
+          f << "camera_matrix:\n";
+          for (int i = 0; i < 9; ++i) f << "  - " << K[i] << "\n";
+          f << "dist_coeffs: [";
+          for (int i = 0; i < dc; ++i) { f << D[i]; if (i < dc-1) f << ", "; }
+          f << "]\n";
+          f.close();
+          RCLCPP_INFO(get_logger(), "ROS params saved: %s", ros_path.c_str());
+        }
+
+        // Print to console for immediate copy-paste
+        RCLCPP_INFO(get_logger(), "═══ Paste into config/detector.yaml ═══");
+        RCLCPP_INFO(get_logger(), "camera_matrix:");
+        for (int i = 0; i < 9; ++i) RCLCPP_INFO(get_logger(), "  - %.6f", K[i]);
+        RCLCPP_INFO(get_logger(), "dist_coeffs: [%.6f, %.6f, %.6f, %.6f, %.6f]",
+          dc>0?D[0]:0.0, dc>1?D[1]:0.0, dc>2?D[2]:0.0,
+          dc>3?D[3]:0.0, dc>4?D[4]:0.0);
+        RCLCPP_INFO(get_logger(), "# Reproj error: %.4f px  (good if < 1.0)",
+          last_result_.reprojection_error);
+        RCLCPP_INFO(get_logger(), "════════════════════════════════════════");
+      }
+    }
   }
   return rclcpp::ok();
 }

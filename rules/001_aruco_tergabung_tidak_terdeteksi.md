@@ -187,7 +187,7 @@ Ekspektasi: Kedua marker terdeteksi secara bersamaan.
 
 - OpenCV ArUco docs: https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html
 - Parameter `detectInvertedMarker`: https://docs.opencv.org/4.x/d1/dcd/structcv_1_1aruco_1_1DetectorParameters.html
-- Saran dosen: Fungsi pemisahan ROI untuk combined board (belum diimplementasi, lihat Solusi C)
+- Saran dosen: Fungsi pemisahan ROI untuk combined board — sudah diimplementasikan melalui `splitCombinedBoard()` dan dilanjutkan small-tab rescue di issue [002].
 
 ---
 
@@ -197,6 +197,7 @@ Ekspektasi: Kedua marker terdeteksi secara bersamaan.
 - Jika setelah fix ini masih ada marker tergabung yang gagal terdeteksi, cek window `Rejected` (tekan `r` di window visualisasi) untuk melihat kandidat yang di-reject
 - Parameter `adaptiveThreshConstant = 3.0` di pass kedua bisa diturunkan lebih jauh (hingga 1.0) jika border masih gagal
 - Setelah implementasi ROI split, lakukan verifikasi kamera langsung dengan board lomba karena kualitas cetak, glare, dan jarak kamera sangat memengaruhi kontur ROI.
+- Untuk marker kecil yang menempel pada marker besar, baca juga [002_aruco_kecil_tidak_terdeteksi.md](./002_aruco_kecil_tidak_terdeteksi.md). Solusi terbaru mencakup predictive top/bottom crop, upscale `5x–7x`, dan hold marker kecil 14 frame.
 
 ---
 

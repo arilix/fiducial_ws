@@ -8,6 +8,20 @@ Real-time detection, 6DOF pose estimation, gate alignment state machine, dan ROS
 
 ---
 
+## Status Terbaru — Board Besar + Marker Kecil
+
+Sistem tetap memakai **DICT_7X7_50 only** dan sekarang mendukung board lomba dengan marker besar serta marker kecil yang menempel pada satu bidang.
+
+- `detectAruco()` menjalankan deteksi normal, ROI rescue, tab rescue, dan full-frame upscale fallback.
+- `detectTopTabMarkers()` mencari tab kecil di sisi marker besar, termasuk prediksi posisi **atas dan bawah**.
+- Marker kecil yang berhasil diselamatkan akan menulis log: `Predictive small-tab detected ID=...`.
+- Stabilizer membedakan track `ID:big` dan `ID:small`, sehingga marker besar dan kecil dengan ID sama tidak saling overwrite.
+- Marker kecil ditahan lebih lama (`14 frame`) untuk mengurangi flicker saat deteksi hanya muncul intermittent.
+
+Catatan fisik: marker kecil tetap butuh cukup piksel. Jika terlalu jauh, kurang cahaya, atau blur, deteksi akan lebih sulit walaupun algoritma rescue aktif.
+
+---
+
 ## System Architecture
 
 ```
@@ -22,7 +36,10 @@ Real-time detection, 6DOF pose estimation, gate alignment state machine, dan ROS
 │  │   ├─ CLAHE contrast enhancement (CPU / GPU*)        │
 │  │   └─ Optional blur / unsharp mask                   │
 │  ├─ detectAruco() — DICT_7X7_50 only                   │
-│  │   └─ cv::aruco::detectMarkers() + SUBPIX refine     │
+│  │   ├─ cv::aruco::detectMarkers() + SUBPIX refine     │
+│  │   ├─ splitCombinedBoard() ROI rescue                │
+│  │   ├─ detectTopTabMarkers() small-tab rescue         │
+│  │   └─ full-frame upscale fallback                    │
 │  ├─ estimatePoses() — solvePnP + EMA smoothing         │
 │  ├─ computeConfidence() — reprojection + Hamming       │
 │  └─ GateAlignmentEngine — state machine                │
@@ -198,7 +215,11 @@ ros2 launch fiducial_detector webcam.launch.xml device_id:=0 show_window:=true
 ros2 launch fiducial_detector webcam.launch.xml device_id:=2
 
 # Pakai RealSense
-ros2 launch fiducial_detector realsense.launch.xml
+ros2 launch fiducial_detector realsense.launch.xml show_window:=true
+
+# RealSense untuk marker kecil: kurangi FPS jika exposure/blur kurang stabil
+ros2 launch fiducial_detector realsense.launch.xml \
+  show_window:=true width:=1280 height:=720 fps_limit:=15
 
 # Subscribe ke topic yang sudah ada (misal dari RealSense)
 ros2 launch fiducial_detector ros_topic.launch.xml \
@@ -443,6 +464,8 @@ Print pada ukuran fisik yang sesuai `marker_size` (contoh: `marker_size:=0.15` �
 | Kamera tidak buka di device lain | Install belum dilakukan | Install semua prerequisite → rebuild dari awal |
 | FPS rendah | `show_window:=true` berat | `show_window:=false`, kurangi resolusi |
 | Deteksi tidak stabil | Lighting buruk / tolerance kecil | Naikkan `alignment_tolerance`, cek pencahayaan |
+| Marker kecil hanya terbaca dekat | Piksel marker kecil terlalu sedikit / blur / exposure | Pakai `1280x720`, coba `fps_limit:=15` atau `10`, tambah cahaya menyebar |
+| Marker kecil flicker | Rescue hanya kena beberapa frame | Cek log `Predictive small-tab detected ID=...`; stabilizer menahan small marker 14 frame |
 | `solvePnP` failed | Intrinsik kamera belum dikalibrasi | Jalankan `calibration.launch.xml` |
 | RealSense tidak terbuka | Flag build salah | Rebuild dengan `-DUSE_REALSENSE=ON` |
 | `cuda:=true` tapi WARN | OpenCV tanpa CUDA | Rebuild dengan `-DUSE_CUDA=ON` atau OpenCV perlu CUDA |
