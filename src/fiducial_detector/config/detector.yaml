@@ -10,7 +10,7 @@ aruco_node:
 
     # ── Display ───────────────────────────────────
     show_window:          false         # set true for desktop testing
-    show_rejected:        true
+    show_rejected:        false
     show_corner_labels:   true
     show_orientation_arrow: true
     show_confidence:      true
@@ -66,14 +66,14 @@ aruco_node:
     errorCorrectionRate:          0.6
     detectInvertedMarker:         true
 
-    # Subpixel corner refinement for stable multi-pose estimation
-    cornerRefinementMethod:       1    # 1=SUBPIX
+    # Corner refinement disabled for performance
+    cornerRefinementMethod:       0    # 0=NONE
     cornerRefinementWinSize:      5
-    cornerRefinementMaxIterations: 50
-    cornerRefinementMinAccuracy:   0.01
+    cornerRefinementMaxIterations: 30
+    cornerRefinementMinAccuracy:   0.1
 
     # ── Preprocessing ────────────────────────────
-    enable_clahe:             true
+    enable_clahe:             false
     clahe_clip_limit:         2.0
     enable_sharpen:           false
     enable_blur:              false

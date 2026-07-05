@@ -7,8 +7,8 @@
     ros2 launch fiducial_detector realsense.launch.xml width:=1280 height:=720 fps_limit:=30
 -->
 <launch>
-  <arg name="width"       default="640"/>
-  <arg name="height"      default="480"/>
+  <arg name="width"       default="1280"/>
+  <arg name="height"      default="720"/>
   <arg name="fps_limit"   default="30"   description="Camera FPS (integer)"/>
   <arg name="marker_size" default="0.05" description="Physical marker size in metres"/>
   <arg name="show_window" default="false"/>

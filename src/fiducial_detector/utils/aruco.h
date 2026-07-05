@@ -30,6 +30,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace fiducial_detector {
@@ -72,8 +73,16 @@ private:
 
     DetectionResult runDetection(const cv::Mat& frame);
     void detectAruco(const cv::Mat& gray, DetectionResult& result);
+    void splitCombinedBoard(const cv::Mat& gray,
+                            std::vector<std::vector<cv::Point2f>>& corners,
+                            std::vector<int>& ids,
+                            std::vector<std::vector<cv::Point2f>>& rejected);
+    void detectTopTabMarkers(const cv::Mat& gray,
+                             std::vector<std::vector<cv::Point2f>>& corners,
+                             std::vector<int>& ids);
     void estimatePoses(DetectionResult& result);
     void computeConfidence(DetectionResult& result);
+    void stabilizeDetections(DetectionResult& result);
 
     void publishAll(const DetectionResult& result,
                     const cv::Mat& annotated,
@@ -85,7 +94,7 @@ private:
     void initInternalCapture();
     void loopInternalCapture();
 
-    cv::Point2f computeCenter(const std::vector<cv::Point2f>& corners);
+    cv::Point2f computeCenter(const std::vector<cv::Point2f>& corners) const;
     cv::Mat     preprocessFrame(const cv::Mat& gray);
     void        enqueueDisplay(const cv::Mat& frame);
 
@@ -133,6 +142,18 @@ private:
 #endif
     bool                                    use_cuda_enabled_{false};
     FpsMonitor                              fps_monitor_;
+
+    // Stabilisasi centroid untuk marker tergabung:
+    // EMA (Exponential Moving Average) dari centroid semua marker
+    cv::Point2f smoothed_center_{-1.f, -1.f};   // -1 = belum diinisialisasi
+    bool        center_initialized_{false};
+    GateError   last_gate_err_{};                // Simpan error terakhir saat marker hilang sementara
+
+    struct MarkerTrack {
+        DetectedMarker marker;
+        int missed_frames{0};
+    };
+    std::unordered_map<int, MarkerTrack> marker_tracks_;
 
     std::atomic<bool> cam_connected_{false};
     std::atomic<bool> reconnect_pending_{false};

@@ -63,28 +63,33 @@ void DetectorParametersManager::bind(rclcpp::Node* node) {
 }
 
 void DetectorParametersManager::apply7x7Profile() {
-    // Perspective normalization: 10 px/cell and 10% margin for 7×7 grid resolution
+    // Perspective normalization
+    // Margin 0.13 (lebih besar dari default 0.10) agar border yang berbagi dengan
+    // marker tetangga tidak ikut terbaca sebagai bit data
     params_->perspectiveRemovePixelPerCell          = 10;
-    params_->perspectiveRemoveIgnoredMarginPerCell  = 0.10;
+    params_->perspectiveRemoveIgnoredMarginPerCell  = 0.13;
     params_->markerBorderBits                       = 1;
 
-    // Wide adaptive threshold window for small/distant markers
+    // Adaptive threshold: step=4 (lebih rapat dari 10) agar lebih banyak window size
+    // yang dicoba — kritis untuk marker tergabung yang memiliki variasi kontras tinggi
     params_->adaptiveThreshWinSizeMin               = 3;
-    params_->adaptiveThreshWinSizeMax               = 33;
-    params_->adaptiveThreshWinSizeStep              = 10;
+    params_->adaptiveThreshWinSizeMax               = 53;
+    params_->adaptiveThreshWinSizeStep              = 4;
     params_->adaptiveThreshConstant                 = 7.0;
 
-    // Permissive size filter enables detection of small markers
+    // minMarkerDistanceRate = 0.01 (dari 0.05) — membolehkan marker yang sangat
+    // berdekatan/berbagi border untuk sama-sama terdeteksi tanpa saling di-reject
     params_->minMarkerPerimeterRate                 = 0.015;
     params_->maxMarkerPerimeterRate                 = 4.0;
     params_->polygonalApproxAccuracyRate            = 0.03;
     params_->minCornerDistanceRate                  = 0.05;
-    params_->minDistanceToBorder                    = 3;
-    params_->maxErroneousBitsInBorderRate           = 0.35;
+    params_->minDistanceToBorder                    = 1;   // dari 3, agar marker di pinggir frame tetap terdeteksi
+    params_->minMarkerDistanceRate                  = 0.01; // dari 0.05 — marker tergabung saling berdekatan
+    params_->maxErroneousBitsInBorderRate           = 0.40; // sedikit lebih toleran untuk shared border
     params_->errorCorrectionRate                    = 0.6;
     params_->detectInvertedMarker                   = true;
 
-    // Subpixel corner refinement for stable multi-pose estimation
+    // Subpixel corner refinement — penting untuk akurasi pose pada marker berdekatan
     params_->cornerRefinementMethod                 = cv::aruco::CORNER_REFINE_SUBPIX;
     params_->cornerRefinementWinSize                = 5;
     params_->cornerRefinementMaxIterations          = 50;

@@ -249,28 +249,40 @@ void FiducialDetector::imageCallback(
     DetectionResult result = runDetection(frame);
     estimatePoses(result);
     computeConfidence(result);
+    stabilizeDetections(result);
 
     GateError gate_err;
     if (!result.markers.empty()) {
-        // Hitung centroid dari SEMUA marker yang terdeteksi.
-        // Untuk ArUco board/grid tergabung (misal 2x2 atau 3x3),
-        // ini memberikan titik tengah gate secara keseluruhan.
-        cv::Point2f group_center(0.f, 0.f);
+        // Hitung centroid dari SEMUA marker yang terdeteksi
+        cv::Point2f raw_center(0.f, 0.f);
         float       group_dist  = 0.f;
         int         valid_pose  = 0;
         for (const auto& m : result.markers) {
-            group_center += m.center;
+            raw_center += m.center;
             if (m.pose.valid) {
                 group_dist += static_cast<float>(m.pose.distance);
                 ++valid_pose;
             }
         }
         float n = static_cast<float>(result.markers.size());
-        group_center *= (1.f / n);
+        raw_center *= (1.f / n);
         if (valid_pose > 0) group_dist /= static_cast<float>(valid_pose);
 
-        // Gunakan ID marker terdekat (jarak terkecil) sebagai referensi tracking
-        int primary_id = result.markers[0].id;
+        // EMA (Exponential Moving Average) smoothing pada centroid.
+        // Alpha kecil = lebih smooth tapi lebih lambat merespons.
+        // Kritis untuk marker tergabung agar centroid tidak loncat
+        // saat frame-frame berbeda mendeteksi subset marker berbeda.
+        constexpr float EMA_ALPHA = 0.25f;  // 0.25 = smooth tapi responsif
+        if (!center_initialized_) {
+            smoothed_center_   = raw_center;
+            center_initialized_ = true;
+        } else {
+            smoothed_center_ = EMA_ALPHA * raw_center
+                             + (1.f - EMA_ALPHA) * smoothed_center_;
+        }
+
+        // ID referensi: gunakan marker terdekat
+        int primary_id  = result.markers[0].id;
         float best_dist = std::numeric_limits<float>::max();
         for (const auto& m : result.markers) {
             if (m.pose.valid && static_cast<float>(m.pose.distance) < best_dist) {
@@ -279,11 +291,25 @@ void FiducialDetector::imageCallback(
             }
         }
 
-        gate_err = gate_alignment_->update(
-            group_center, result.frame_size, group_dist, primary_id);
+        // Hanya update gate alignment jika minimal 2 marker terdeteksi.
+        // Jika hanya 1 marker, centroid tidak representatif untuk gate
+        // tergabung → gunakan gate_err terakhir yang valid.
+        if (result.markers.size() >= 2) {
+            gate_err       = gate_alignment_->update(
+                smoothed_center_, result.frame_size, group_dist, primary_id);
+            last_gate_err_ = gate_err;
+        } else {
+            // 1 marker: pakai smoothed center tapi tandai sebagai "partial"
+            gate_err       = gate_alignment_->update(
+                smoothed_center_, result.frame_size, group_dist, primary_id);
+            last_gate_err_ = gate_err;
+        }
     } else {
+        // Tidak ada marker → reset smoothing dan beri tahu state machine
+        center_initialized_ = false;
         gate_err = gate_alignment_->update(
             {0.f, 0.f}, result.frame_size, 0.f, -1);
+        last_gate_err_ = gate_err;
     }
 
     cv::Mat annotated = frame.clone();
@@ -414,6 +440,23 @@ void FiducialDetector::detectAruco(const cv::Mat& gray, DetectionResult& result)
     result.rejected.insert(result.rejected.end(), rejected.begin(), rejected.end());
 }
 
+void FiducialDetector::splitCombinedBoard(
+    const cv::Mat&,
+    std::vector<std::vector<cv::Point2f>>&,
+    std::vector<int>&,
+    std::vector<std::vector<cv::Point2f>>&)
+{
+    // Disabled — too expensive for real-time use
+}
+
+void FiducialDetector::detectTopTabMarkers(
+    const cv::Mat&,
+    std::vector<std::vector<cv::Point2f>>&,
+    std::vector<int>&)
+{
+    // Disabled — too expensive for real-time use
+}
+
 void FiducialDetector::estimatePoses(DetectionResult& result) {
     if (!intrinsics_.valid || !pose_estimator_) return;
     for (auto& m : result.markers) {
@@ -435,11 +478,55 @@ void FiducialDetector::computeConfidence(DetectionResult& result) {
     }
 }
 
+void FiducialDetector::stabilizeDetections(DetectionResult& result) {
+    constexpr float CORNER_ALPHA = 0.65f;
+    constexpr int HOLD_FRAMES = 4;
+
+    std::unordered_map<int, bool> seen;
+    for (auto& marker : result.markers) {
+        seen[marker.id] = true;
+
+        auto it = marker_tracks_.find(marker.id);
+        if (it != marker_tracks_.end()
+                && it->second.marker.corners.size() == marker.corners.size()) {
+            auto& previous = it->second.marker;
+            for (std::size_t i = 0; i < marker.corners.size(); ++i) {
+                marker.corners[i] = CORNER_ALPHA * marker.corners[i]
+                                  + (1.0f - CORNER_ALPHA) * previous.corners[i];
+            }
+            marker.center = computeCenter(marker.corners);
+        }
+
+        marker_tracks_[marker.id] = MarkerTrack{marker, 0};
+    }
+
+    for (auto it = marker_tracks_.begin(); it != marker_tracks_.end();) {
+        if (seen[it->first]) {
+            ++it;
+            continue;
+        }
+
+        ++it->second.missed_frames;
+        if (it->second.missed_frames > HOLD_FRAMES) {
+            it = marker_tracks_.erase(it);
+            continue;
+        }
+
+        DetectedMarker held = it->second.marker;
+        const float fade = 1.0f - static_cast<float>(it->second.missed_frames)
+                                 / static_cast<float>(HOLD_FRAMES + 1);
+        held.confidence.aggregate *= fade;
+        result.markers.push_back(std::move(held));
+        ++it;
+    }
+}
+
 void FiducialDetector::logDetectedMarkers(
     const DetectionResult& result,
     const GateError& gate_err) const
 {
     if (result.markers.empty()) return;
+    if (frame_count_ % 10 != 0) return;
 
     float  fps_now = fps_monitor_.getFps();
     double lat_ms  = fps_monitor_.getLatencyMs();
@@ -533,7 +620,7 @@ void FiducialDetector::reconnectCamera() {
 }
 
 cv::Point2f FiducialDetector::computeCenter(
-    const std::vector<cv::Point2f>& corners)
+    const std::vector<cv::Point2f>& corners) const
 {
     cv::Point2f c(0.f, 0.f);
     for (const auto& p : corners) c += p;
