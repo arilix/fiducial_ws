@@ -406,7 +406,8 @@ Semua solusi A–E sudah diimplementasikan di `aruco.cpp`:
 | Stabilizer key | Tracking dibedakan `ID:big` dan `ID:small` | Mencegah marker besar dan kecil dengan ID sama saling overwrite/flicker |
 | Small marker hold | Small marker di-hold 14 frame; big marker 7 frame | Mengurangi flicker ketika tab kecil hanya terbaca intermittent |
 | Runtime log | `Predictive small-tab detected ID=...` | Indikator terminal bahwa rescue crop berhasil |
-| FPS tuning | Semua ROI rescue kecil jalan tiap 3 frame; predictive ROI max 36; full-frame upscale hanya saat tidak ada marker dan tiap 10 frame | Mengurangi latency dari rescue berat sambil tetap dibantu hold 14 frame |
+| FPS tuning | Rescue kecil periodik; default Jetson tiap 6 frame dengan predictive ROI max 12; full-frame upscale default off | Mengurangi latency dari rescue berat sambil tetap dibantu hold 14 frame |
+| Jetson/UAV tuning | Default ringan: `small_marker_rescue_period=6`, `predictive_roi_limit=12`, `enable_split_rescue=false`, `enable_full_frame_fallback=false`, `publish_debug_image=false` | Deteksi utama tetap realtime; rescue kecil periodik dan dibantu hold 14 frame |
 
 **Catatan performa:** jika log menunjukkan latency `66–132ms`, bottleneck ada di deteksi CPU, bukan di RealSense. Penyebab utamanya adalah full-frame upscale dan banyak ROI rescue. Versi terbaru membatasi rescue berat agar FPS lebih tinggi.
 
@@ -415,6 +416,22 @@ Semua solusi A–E sudah diimplementasikan di `aruco.cpp`:
 ```bash
 ros2 launch fiducial_detector realsense.launch.xml \
   width:=640 height:=480 fps_limit:=30 show_window:=true
+```
+
+Untuk mode UAV/Jetson, jalankan tanpa window/debug image:
+
+```bash
+ros2 launch fiducial_detector realsense.launch.xml \
+  width:=640 height:=480 fps_limit:=30 show_window:=false \
+  small_marker_rescue_period:=6 predictive_roi_limit:=12
+```
+
+Jika FPS masih terlalu rendah, naikkan period rescue:
+
+```bash
+ros2 launch fiducial_detector realsense.launch.xml \
+  width:=640 height:=480 fps_limit:=30 show_window:=false \
+  small_marker_rescue_period:=10 predictive_roi_limit:=8
 ```
 
 **Build status:** ✅ `colcon build` berhasil (2026-07-05)

@@ -237,7 +237,12 @@ ros2 launch fiducial_detector realsense.launch.xml
 # Dengan preview window
 ros2 launch fiducial_detector realsense.launch.xml show_window:=true
 
-# FPS mode: profil 30 FPS yang umum didukung RealSense
+# UAV/Jetson mode: ringan, tanpa window/debug image
+ros2 launch fiducial_detector realsense.launch.xml \
+  width:=640 height:=480 fps_limit:=30 show_window:=false \
+  small_marker_rescue_period:=6 predictive_roi_limit:=12
+
+# Desktop debug: lebih berat karena OpenCV window aktif
 ros2 launch fiducial_detector realsense.launch.xml \
   width:=640 height:=480 fps_limit:=30 show_window:=true
 
@@ -262,6 +267,11 @@ ros2 launch fiducial_detector realsense.launch.xml \
 | `fps_limit` | `30` | FPS kamera (harus integer) |
 | `marker_size` | `0.05` | Ukuran fisik marker (metre) |
 | `show_window` | `false` | Tampilkan jendela OpenCV |
+| `publish_debug_image` | `false` | Publish `/fiducial/debug_image`; matikan untuk UAV |
+| `small_marker_rescue_period` | `6` | Rescue marker kecil tiap N frame |
+| `predictive_roi_limit` | `12` | Batas ROI prediktif per rescue frame |
+| `enable_split_rescue` | `false` | ROI split dari rejected candidates; mahal |
+| `enable_full_frame_fallback` | `false` | Full-frame upscale fallback; sangat mahal |
 | `cuda` | `false` | GPU preprocessing |
 
 > **Camera topic:** `/camera/camera/color/image_raw`  

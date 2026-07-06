@@ -120,10 +120,16 @@ private:
     bool   show_corner_labels_{true};
     bool   show_orientation_arrow_{true};
     bool   show_confidence_{true};
+    bool   publish_debug_image_{false};
     bool   enable_clahe_{true};
     double clahe_clip_{2.0};
     bool   enable_sharpen_{false};
     bool   enable_blur_{false};
+    bool   enable_small_marker_rescue_{true};
+    bool   enable_split_rescue_{false};
+    bool   enable_full_frame_fallback_{false};
+    int    small_marker_rescue_period_{6};
+    int    predictive_roi_limit_{12};
 
     struct CameraIntrinsics { cv::Mat K, D; bool valid{false}; } intrinsics_;
 

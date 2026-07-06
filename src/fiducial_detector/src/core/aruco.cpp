@@ -160,10 +160,16 @@ void FiducialDetector::declareParameters() {
     declare_parameter("show_corner_labels",     true);
     declare_parameter("show_orientation_arrow", true);
     declare_parameter("show_confidence",        true);
+    declare_parameter("publish_debug_image",    false);
     declare_parameter("enable_clahe",           true);
     declare_parameter("clahe_clip_limit",       2.0);
     declare_parameter("enable_sharpen",         false);
     declare_parameter("enable_blur",            false);
+    declare_parameter("enable_small_marker_rescue", true);
+    declare_parameter("enable_split_rescue",        false);
+    declare_parameter("enable_full_frame_fallback", false);
+    declare_parameter("small_marker_rescue_period", 6);
+    declare_parameter("predictive_roi_limit",       12);
     declare_parameter("cuda",                   false);          // true/false
     declare_parameter("capture_internal",       false);
     declare_parameter("capture_device_id",      0);
@@ -187,10 +193,18 @@ void FiducialDetector::loadRosParams() {
     show_corner_labels_      = get_parameter("show_corner_labels").as_bool();
     show_orientation_arrow_  = get_parameter("show_orientation_arrow").as_bool();
     show_confidence_         = get_parameter("show_confidence").as_bool();
+    publish_debug_image_     = get_parameter("publish_debug_image").as_bool();
     enable_clahe_            = get_parameter("enable_clahe").as_bool();
     clahe_clip_              = get_parameter("clahe_clip_limit").as_double();
     enable_sharpen_          = get_parameter("enable_sharpen").as_bool();
     enable_blur_             = get_parameter("enable_blur").as_bool();
+    enable_small_marker_rescue_ = get_parameter("enable_small_marker_rescue").as_bool();
+    enable_split_rescue_        = get_parameter("enable_split_rescue").as_bool();
+    enable_full_frame_fallback_ = get_parameter("enable_full_frame_fallback").as_bool();
+    small_marker_rescue_period_ =
+        std::max(1, static_cast<int>(get_parameter("small_marker_rescue_period").as_int()));
+    predictive_roi_limit_ =
+        std::max(0, static_cast<int>(get_parameter("predictive_roi_limit").as_int()));
     {
         use_cuda_enabled_ = get_parameter("cuda").as_bool();
     }
@@ -395,23 +409,27 @@ void FiducialDetector::imageCallback(
         last_gate_err_ = gate_err;
     }
 
-    cv::Mat annotated = frame.clone();
-    bool any_locked = false;
+    cv::Mat annotated;
+    const bool need_visual = show_window_ || publish_debug_image_;
+    if (need_visual) {
+        annotated = frame.clone();
+        bool any_locked = false;
 
-    for (const auto& m : result.markers) {
-        std::vector<std::vector<cv::Point2f>> c_wrap{m.corners};
-        std::vector<int> id_wrap{m.id};
-        visualizer_->drawDetectedMarkers(annotated, c_wrap, id_wrap, m.type);
-        if (m.pose.valid) {
-            visualizer_->drawPoseAxis(annotated, m.pose,
-                intrinsics_.K, intrinsics_.D,
-                static_cast<float>(marker_size_) * 0.6f);
+        for (const auto& m : result.markers) {
+            std::vector<std::vector<cv::Point2f>> c_wrap{m.corners};
+            std::vector<int> id_wrap{m.id};
+            visualizer_->drawDetectedMarkers(annotated, c_wrap, id_wrap, m.type);
+            if (m.pose.valid) {
+                visualizer_->drawPoseAxis(annotated, m.pose,
+                    intrinsics_.K, intrinsics_.D,
+                    static_cast<float>(marker_size_) * 0.6f);
+            }
+            if (visualizer_->isAligned(m.center, result.frame_size)) any_locked = true;
         }
-        if (visualizer_->isAligned(m.center, result.frame_size)) any_locked = true;
-    }
 
-    if (show_rejected_) visualizer_->drawRejected(annotated, result.rejected);
-    visualizer_->drawUI(annotated, any_locked);
+        if (show_rejected_) visualizer_->drawRejected(annotated, result.rejected);
+        visualizer_->drawUI(annotated, any_locked);
+    }
 
     if (show_window_) enqueueDisplay(annotated);
     publishAll(result, annotated, gate_err, msg->header.stamp);
@@ -512,14 +530,17 @@ void FiducialDetector::detectAruco(const cv::Mat& gray, DetectionResult& result)
     cv::aruco::detectMarkers(gray, aruco_dict_, corners, ids, dp, rejected);
     result.rejected.insert(result.rejected.end(), rejected.begin(), rejected.end());
 
-    const bool rescue_frame = (frame_count_ % 3 == 0);
-    if (rescue_frame && !rejected.empty()) {
+    const bool rescue_frame = enable_small_marker_rescue_
+        && (frame_count_ % static_cast<uint64_t>(small_marker_rescue_period_) == 0);
+    if (rescue_frame && enable_split_rescue_ && !rejected.empty()) {
         splitCombinedBoard(gray, corners, ids, rejected);
     }
     if (rescue_frame && !corners.empty()) {
         detectTopTabMarkers(gray, corners, ids);
     }
-    if (corners.empty() && frame_count_ % 10 == 0) {
+    if (enable_full_frame_fallback_
+            && corners.empty()
+            && frame_count_ % static_cast<uint64_t>(small_marker_rescue_period_ * 2) == 0) {
         cv::Mat upscaled;
         constexpr double FULL_SCALE = 1.5;
         cv::resize(gray, upscaled, cv::Size(), FULL_SCALE, FULL_SCALE, cv::INTER_CUBIC);
@@ -687,8 +708,8 @@ void FiducialDetector::detectTopTabMarkers(
 
     std::vector<TabRoi> tab_rois;
     std::vector<PredictiveRoi> predictive_rois;
-    const bool heavy_rescue_frame = (frame_count_ % 3 == 0);
-    constexpr std::size_t MAX_PREDICTIVE_ROIS = 36;
+    const std::size_t max_predictive_rois =
+        static_cast<std::size_t>(predictive_roi_limit_);
     const cv::Rect bounds(0, 0, gray.cols, gray.rows);
     const int min_big_side = std::max(24, std::min(gray.cols, gray.rows) / 14);
     const std::size_t original_count = corners.size();
@@ -704,25 +725,16 @@ void FiducialDetector::detectTopTabMarkers(
         const int tab_w = std::max(24, static_cast<int>(marker_rect.width * 0.58));
         const int tab_h = std::max(24, static_cast<int>(marker_rect.height * 0.58));
         const int cx = marker_rect.x + marker_rect.width / 2;
-        const int cy = marker_rect.y + marker_rect.height / 2;
         const int top = marker_rect.y;
         const int bottom = marker_rect.y + marker_rect.height;
-        const int left = marker_rect.x;
-        const int right = marker_rect.x + marker_rect.width;
         const int overlap_y = static_cast<int>(0.10 * marker_rect.height);
-        const int overlap_x = static_cast<int>(0.10 * marker_rect.width);
         const int reach_y = static_cast<int>(0.48 * marker_rect.height);
-        const int reach_x = static_cast<int>(0.48 * marker_rect.width);
 
         std::vector<TabRoi> candidates = {
             {cv::Rect(cx - tab_w / 2, top - reach_y, tab_w, tab_h),
              false, reach_y, big_side},
             {cv::Rect(cx - tab_w / 2, bottom - overlap_y, tab_w, tab_h),
              false, overlap_y, big_side},
-            {cv::Rect(left - reach_x, cy - tab_w / 2, tab_h, tab_w),
-             true, reach_x, big_side},
-            {cv::Rect(right - overlap_x, cy - tab_w / 2, tab_h, tab_w),
-             true, overlap_x, big_side},
         };
 
         for (auto candidate : candidates) {
@@ -739,18 +751,18 @@ void FiducialDetector::detectTopTabMarkers(
             if (!duplicate) tab_rois.push_back(candidate);
         }
 
-        if (heavy_rescue_frame) {
-            const double side_rates[] = {0.25, 0.30, 0.35, 0.40};
-            const double gap_rates[] = {-0.03, 0.02, 0.07};
-            const double x_offsets[] = {-0.08, 0.00, 0.08};
+        if (max_predictive_rois > 0) {
+            const double side_rates[] = {0.28, 0.34};
+            const double gap_rates[] = {-0.02, 0.04};
+            const double x_offsets[] = {-0.06, 0.00, 0.06};
             for (double side_rate : side_rates) {
-                if (predictive_rois.size() >= MAX_PREDICTIVE_ROIS) break;
+                if (predictive_rois.size() >= max_predictive_rois) break;
                 const int side = std::max(18, static_cast<int>(big_side * side_rate));
                 for (double x_offset : x_offsets) {
-                    if (predictive_rois.size() >= MAX_PREDICTIVE_ROIS) break;
+                    if (predictive_rois.size() >= max_predictive_rois) break;
                     const int shifted_cx = cx + static_cast<int>(big_side * x_offset);
                     for (double gap_rate : gap_rates) {
-                        if (predictive_rois.size() >= MAX_PREDICTIVE_ROIS) break;
+                        if (predictive_rois.size() >= max_predictive_rois) break;
                         cv::Rect bottom_roi(
                             shifted_cx - side / 2,
                             bottom + static_cast<int>(big_side * gap_rate),
@@ -802,13 +814,12 @@ void FiducialDetector::detectTopTabMarkers(
         cv::Mat upscaled;
         cv::resize(padded, upscaled, cv::Size(), scale, scale, cv::INTER_CUBIC);
 
-        cv::Mat blurred, sharpened, binary, inverted;
+        cv::Mat blurred, sharpened, binary;
         cv::GaussianBlur(upscaled, blurred, cv::Size(0, 0), 1.0);
         cv::addWeighted(upscaled, 1.8, blurred, -0.8, 0, sharpened);
         cv::threshold(sharpened, binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-        cv::bitwise_not(binary, inverted);
 
-        for (const auto& img : {sharpened, binary, inverted}) {
+        for (const auto& img : {sharpened, binary}) {
             std::vector<int> local_ids;
             std::vector<std::vector<cv::Point2f>> local_corners, local_rejected;
             cv::aruco::detectMarkers(
@@ -843,19 +854,16 @@ void FiducialDetector::detectTopTabMarkers(
         cv::copyMakeBorder(crop, padded, border, border, border, border,
                            cv::BORDER_CONSTANT, cv::Scalar(255));
 
-        const double scale = roi.big_side < 180 ? 7.0
-                           : roi.big_side < 280 ? 6.0
-                           : 5.0;
+        const double scale = roi.big_side < 180 ? 5.0 : 4.0;
         cv::Mat upscaled;
         cv::resize(padded, upscaled, cv::Size(), scale, scale, cv::INTER_CUBIC);
 
-        cv::Mat blurred, sharpened, binary, inverted;
+        cv::Mat blurred, sharpened, binary;
         cv::GaussianBlur(upscaled, blurred, cv::Size(0, 0), 1.0);
         cv::addWeighted(upscaled, 1.8, blurred, -0.8, 0, sharpened);
         cv::threshold(sharpened, binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-        cv::bitwise_not(binary, inverted);
 
-        for (const auto& img : {sharpened, binary, inverted}) {
+        for (const auto& img : {sharpened, binary}) {
             std::vector<int> local_ids;
             std::vector<std::vector<cv::Point2f>> local_corners, local_rejected;
             cv::aruco::detectMarkers(
@@ -1001,11 +1009,13 @@ void FiducialDetector::publishAll(
 {
     logDetectedMarkers(result, gate_err);
 
-    auto img_msg = cv_bridge::CvImage(
-        std_msgs::msg::Header(), "bgr8", annotated).toImageMsg();
-    img_msg->header.stamp    = stamp;
-    img_msg->header.frame_id = "camera";
-    pub_debug_->publish(*img_msg);
+    if (publish_debug_image_ && !annotated.empty()) {
+        auto img_msg = cv_bridge::CvImage(
+            std_msgs::msg::Header(), "bgr8", annotated).toImageMsg();
+        img_msg->header.stamp    = stamp;
+        img_msg->header.frame_id = "camera";
+        pub_debug_->publish(*img_msg);
+    }
 
     {
         auto msg   = std_msgs::msg::String();

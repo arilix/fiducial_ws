@@ -8,6 +8,7 @@ Folder ini berisi dokumentasi masalah yang ditemukan selama pengembangan sistem 
 |----|------|-------|--------|
 | 001 | [001_aruco_tergabung_tidak_terdeteksi.md](./001_aruco_tergabung_tidak_terdeteksi.md) | ArUco tergabung (combined board) tidak terdeteksi + warna dibalik | ✅ Solved |
 | 002 | [002_aruco_kecil_tidak_terdeteksi.md](./002_aruco_kecil_tidak_terdeteksi.md) | ArUco kecil tidak terdeteksi (small marker detection) | ✅ Solved / Tuned |
+| 003 | [003_struktur_code_fiducial_detector.md](./003_struktur_code_fiducial_detector.md) | Struktur code `fiducial_detector` dan pola implementasi ulang | 📘 Reference |
 
 ---
 

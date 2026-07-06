@@ -12,6 +12,11 @@
   <arg name="fps_limit"   default="30"   description="Camera FPS (integer)"/>
   <arg name="marker_size" default="0.05" description="Physical marker size in metres"/>
   <arg name="show_window" default="false"/>
+  <arg name="publish_debug_image" default="false"/>
+  <arg name="small_marker_rescue_period" default="6"/>
+  <arg name="predictive_roi_limit" default="12"/>
+  <arg name="enable_split_rescue" default="false"/>
+  <arg name="enable_full_frame_fallback" default="false"/>
   <arg name="cuda"        default="false" description="true/false — GPU CLAHE/blur/sharpen (requires USE_CUDA=ON build)"/>
 
   <!-- Intel RealSense ROS2 driver — publishes /camera/camera/color/image_raw -->
@@ -30,6 +35,11 @@
     <param name="camera_topic" value="/camera/camera/color/image_raw"/>
     <param name="marker_size"  value="$(var marker_size)"/>
     <param name="show_window"  value="$(var show_window)"/>
+    <param name="publish_debug_image" value="$(var publish_debug_image)"/>
+    <param name="small_marker_rescue_period" value="$(var small_marker_rescue_period)"/>
+    <param name="predictive_roi_limit" value="$(var predictive_roi_limit)"/>
+    <param name="enable_split_rescue" value="$(var enable_split_rescue)"/>
+    <param name="enable_full_frame_fallback" value="$(var enable_full_frame_fallback)"/>
     <param name="cuda"         value="$(var cuda)"/>
   </node>
 </launch>
