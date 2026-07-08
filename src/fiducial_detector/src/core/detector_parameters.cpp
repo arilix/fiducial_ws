@@ -3,7 +3,7 @@
 namespace fiducial_detector {
 
 DetectorParametersManager::DetectorParametersManager()
-    : params_(cv::aruco::DetectorParameters::create())
+    : params_(fiducial_opencv_compat::makeDetectorParameters())
 {}
 
 void DetectorParametersManager::declareAll(rclcpp::Node* node) {

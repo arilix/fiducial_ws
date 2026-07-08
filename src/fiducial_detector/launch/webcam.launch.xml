@@ -1,6 +1,6 @@
 <!--
   webcam.launch.xml
-  DICT_7X7_50 Gate Centering — Webcam Pipeline
+  DICT_7X7_50 Gate Centering - Webcam Pipeline
 
   Usage:
     ros2 launch fiducial_detector webcam.launch.xml
@@ -16,7 +16,7 @@
   <arg name="fps_limit"   default="30.0"/>
   <arg name="marker_size" default="0.05"  description="Physical marker size in metres"/>
   <arg name="show_window" default="false"/>
-  <arg name="cuda"        default="false" description="true/false — GPU CLAHE/blur/sharpen (requires USE_CUDA=ON build)"/>
+  <arg name="npu"         default="true"  description="true/false - probe Raspberry Pi AI HAT / Hailo NPU"/>
 
   <!-- C++ Camera Capture Node (OpenCV VideoCapture via V4L2) -->
   <node pkg="fiducial_detector" exec="capture_node" name="capture_node" output="screen">
@@ -36,6 +36,6 @@
     <param name="camera_topic" value="/camera/image_raw"/>
     <param name="marker_size"  value="$(var marker_size)"/>
     <param name="show_window"  value="$(var show_window)"/>
-    <param name="cuda"         value="$(var cuda)"/>
+    <param name="npu"          value="$(var npu)"/>
   </node>
 </launch>

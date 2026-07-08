@@ -2,7 +2,7 @@
 <package format="3">
   <name>fiducial_detector</name>
   <version>2.0.0</version>
-  <description>Production-ready ROS2 Humble multi-marker fiducial detection system.
+  <description>Production-ready ROS2 Jazzy multi-marker fiducial detection system.
     Full OpenCV ArUco pipeline with MarkerDecoder, ChArUco, GridBoard, Diamond,
     custom dictionaries, benchmark, calibration, and confidence scoring.
   </description>
@@ -20,7 +20,6 @@
   <depend>image_transport</depend>
   <build_depend>libopencv-dev</build_depend>
   <build_depend>libeigen3-dev</build_depend>
-  <build_depend>libapriltag-dev</build_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <export><build_type>ament_cmake</build_type></export>

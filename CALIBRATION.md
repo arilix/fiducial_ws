@@ -19,12 +19,12 @@ RealSense memiliki **factory calibration** bawaan yang cukup akurat. Ada dua jal
 
 RealSense mempublish intrinsics lewat topic `/camera/camera/color/camera_info`. Tidak perlu papan chessboard.
 
-> **Penting untuk marker kecil:** pakai intrinsics dari resolusi yang sama dengan launch deteksi. Default `realsense.launch.xml` memakai **1280×720**. Jika kamu mengubah ke 640×480 atau resolusi lain, baca ulang `camera_info` karena `cx`, `cy`, dan focal length efektif berubah.
+> **Penting untuk marker kecil:** pakai intrinsics dari resolusi yang sama dengan launch deteksi. Default `realsense.launch.xml` memakai **424×240 @ 15 FPS** agar aman di Jetson/USB2. Jika kamu mengubah ke 640×480, 1280×720, atau resolusi lain, baca ulang `camera_info` karena `cx`, `cy`, dan focal length efektif berubah.
 
 ### Step 1 — Jalankan RealSense driver
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 ros2 launch realsense2_camera rs_launch.py enable_color:=true enable_depth:=false
 ```
 
@@ -73,7 +73,7 @@ dist_coeffs: [-0.056, 0.067, 0.001, -0.000, -0.021]   # dari field 'd'
 ### Step 4 — Sesuaikan resolusi
 
 Pastikan resolusi di `realsense.launch.xml` cocok dengan yang dipakai saat baca `camera_info`.
-Default launch file: **1280×720**.
+Default launch file: **424×240**.
 
 Kalau ingin 640×480, jalankan:
 ```bash

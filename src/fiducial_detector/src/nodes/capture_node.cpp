@@ -1,5 +1,5 @@
 #include "utils/capture_node.h"
-#include <cv_bridge/cv_bridge.h>
+#include <cv_bridge/cv_bridge.hpp>
 #include <chrono>
 
 namespace fiducial_detector {

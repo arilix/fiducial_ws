@@ -28,7 +28,7 @@ int MarkerGenerator::generateDictionarySet(
         std::fprintf(stderr, "[MarkerGenerator] Only DICT_7X7_50 is supported\n");
         return -1;
     }
-    auto dict  = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_7X7_50);
+    auto dict  = fiducial_opencv_compat::getPredefinedDictionary(cv::aruco::DICT_7X7_50);
     int  total = dict->bytesList.rows;
 
     if (!ensureDir(output_dir)) {
@@ -61,10 +61,10 @@ bool MarkerGenerator::validateGeneratedDictionary(
         std::fprintf(stderr, "[MarkerGenerator] Only DICT_7X7_50 is supported\n");
         return false;
     }
-    auto dict  = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_7X7_50);
+    auto dict  = fiducial_opencv_compat::getPredefinedDictionary(cv::aruco::DICT_7X7_50);
     int  total = dict->bytesList.rows;
 
-    auto dp = cv::aruco::DetectorParameters::create();
+    auto dp = fiducial_opencv_compat::makeDetectorParameters();
     // Perspective normalization optimized for 7×7 grid resolution
     dp->perspectiveRemovePixelPerCell         = 10;
     dp->perspectiveRemoveIgnoredMarginPerCell = 0.10;

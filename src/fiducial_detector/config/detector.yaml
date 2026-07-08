@@ -14,10 +14,13 @@ aruco_node:
     show_corner_labels:   true
     show_orientation_arrow: true
     show_confidence:      true
+    publish_debug_image:  false         # set true only when another node needs /fiducial/debug_image
+    npu:                  true          # Raspberry Pi AI HAT / Hailo NPU probe; ArUco filters stay CPU
 
     # ── Gate Alignment ────────────────────────────
     alignment_tolerance:  50            # pixels for ALIGNED state
     alignment_stable_frames: 10        # consecutive frames for GATE_READY
+    min_detection_confidence: 0.70      # reject weak/false ArUco hits before gate logic
 
     # ── Tracking ──────────────────────────────────
     smoothing_alpha:      0.4           # EMA alpha for pose smoothing (0=freeze, 1=raw)
@@ -71,7 +74,7 @@ aruco_node:
     perspectiveRemoveIgnoredMarginPerCell:  0.10
     markerBorderBits:                       1
 
-    # Wide adaptive threshold window for small/distant markers
+    # Adaptive threshold window for standard ArUco detection
     adaptiveThreshWinSizeMin:    3
     adaptiveThreshWinSizeMax:    33
     adaptiveThreshWinSizeStep:   10

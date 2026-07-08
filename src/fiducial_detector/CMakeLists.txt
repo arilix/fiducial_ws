@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.16)
 project(fiducial_detector)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -17,7 +17,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
-find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc highgui aruco calib3d)
+find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc highgui objdetect calib3d)
 find_package(Eigen3 REQUIRED)
 
 set(COMMON_SRCS
@@ -77,36 +77,35 @@ target_link_libraries(capture_node ${OpenCV_LIBS})
 
 option(USE_REALSENSE "Enable Intel RealSense support in capture_node" OFF)
 if(USE_REALSENSE)
-  find_package(realsense2 REQUIRED)
-  target_compile_definitions(capture_node PRIVATE FIDUCIAL_USE_REALSENSE)
-  target_link_libraries(capture_node ${realsense2_LIBRARY})
-  target_include_directories(capture_node PRIVATE ${realsense2_INCLUDE_DIR})
-  message(STATUS "capture_node: Intel RealSense support ENABLED")
+  find_package(realsense2 QUIET)
+  if(realsense2_FOUND)
+    target_compile_definitions(capture_node PRIVATE FIDUCIAL_USE_REALSENSE)
+    if(TARGET realsense2::realsense2)
+      target_link_libraries(capture_node realsense2::realsense2)
+    else()
+      target_link_libraries(capture_node ${realsense2_LIBRARY})
+      target_include_directories(capture_node PRIVATE ${realsense2_INCLUDE_DIR})
+    endif()
+    message(STATUS "capture_node: Intel RealSense support ENABLED")
+  else()
+    message(WARNING
+      "USE_REALSENSE=ON but librealsense2 development files were not found. "
+      "capture_node source='realsense' will be disabled. "
+      "This does not affect realsense.launch.xml, which uses the ROS "
+      "realsense2_camera driver.")
+  endif()
 else()
-  message(STATUS "capture_node: RealSense OFF (rebuild with -DUSE_REALSENSE=ON)")
+  message(STATUS
+    "capture_node: direct librealsense support OFF. "
+    "Use realsense.launch.xml with ros-jazzy-realsense2-camera for Jetson.")
 endif()
 
-# ── CUDA GPU acceleration (preprocessing: CLAHE, blur, sharpen) ───────────
-option(USE_CUDA "Enable CUDA GPU acceleration for preprocessing" OFF)
-if(USE_CUDA)
-  if(NOT DEFINED OpenCV_CUDA_VERSION AND NOT DEFINED CUDA_VERSION)
-    find_package(CUDA QUIET)
-  endif()
-  if(NOT OpenCV_CUDA_VERSION)
-    message(WARNING
-      "USE_CUDA=ON but OpenCV has no CUDA support. "
-      "Rebuild OpenCV with -DWITH_CUDA=ON -DWITH_CUDNN=ON. "
-      "Falling back to CPU preprocessing.")
-  else()
-    foreach(tgt aruco_node calibration_node)
-      target_compile_definitions(${tgt} PRIVATE FIDUCIAL_USE_CUDA)
-    endforeach()
-    message(STATUS "CUDA preprocessing: ENABLED "
-      "(OpenCV CUDA ${OpenCV_CUDA_VERSION})")
-  endif()
-else()
-  message(STATUS "CUDA preprocessing: OFF (rebuild with -DUSE_CUDA=ON)")
-endif()
+# ── Raspberry Pi AI HAT / Hailo NPU status ────────────────────────────────
+#
+# HailoRT is used as an external device runtime. This package currently runs a
+# classical OpenCV ArUco pipeline, so preprocessing remains on CPU; the node can
+# still probe the Hailo device at runtime when launched with npu:=true.
+message(STATUS "Hailo NPU mode: runtime probe via npu:=true; OpenCV preprocessing uses CPU")
 
 # ── dict_test_node — DICT_7X7_50 50/50 validation ─────────────────────────
 add_executable(dict_test_node src/main/dict_test_main.cpp)

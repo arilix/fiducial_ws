@@ -1,4 +1,4 @@
-# Panduan Launch — fiducial\_detector (ROS 2 Humble)
+# Panduan Launch — fiducial\_detector (ROS 2 Jazzy)
 
 Semua launch file menggunakan format **XML** (tanpa Python). Pipeline kamera sepenuhnya C++.
 
@@ -8,20 +8,20 @@ Semua launch file menggunakan format **XML** (tanpa Python). Pipeline kamera sep
 
 Jalankan sekali di device baru sebelum melakukan build pertama kali.
 
-### ROS 2 Humble Packages
+### ROS 2 Jazzy Packages
 
 ```bash
 sudo apt update
 sudo apt install -y \
-  ros-humble-rclcpp \
-  ros-humble-rclcpp-components \
-  ros-humble-sensor-msgs \
-  ros-humble-geometry-msgs \
-  ros-humble-std-msgs \
-  ros-humble-cv-bridge \
-  ros-humble-image-transport \
-  ros-humble-tf2 \
-  ros-humble-tf2-geometry-msgs
+  ros-jazzy-rclcpp \
+  ros-jazzy-rclcpp-components \
+  ros-jazzy-sensor-msgs \
+  ros-jazzy-geometry-msgs \
+  ros-jazzy-std-msgs \
+  ros-jazzy-cv-bridge \
+  ros-jazzy-image-transport \
+  ros-jazzy-tf2 \
+  ros-jazzy-tf2-geometry-msgs
 ```
 
 ### OpenCV + Build Tools
@@ -38,19 +38,26 @@ sudo apt install -y \
 
 > Verifikasi: `python3 -c "import cv2; print(cv2.__version__)"` → harus ≥ 4.x
 
-### Intel RealSense SDK (opsional)
+> Catatan Jetson/Jazzy: workspace ini sudah disesuaikan untuk OpenCV NVIDIA 4.8
+> yang menyediakan ArUco lewat modul `objdetect`. Tidak perlu install
+> `libopencv-contrib-dev` Ubuntu karena paket itu konflik dengan `libopencv-dev`
+> NVIDIA di Jetson.
+
+### Intel RealSense Driver (opsional)
 
 Hanya diperlukan jika menggunakan kamera Intel RealSense D4xx.
 
 ```bash
-sudo apt install -y \
-  librealsense2-dev \
-  librealsense2-udev-rules \
-  ros-humble-realsense2-camera
+sudo apt install -y ros-jazzy-realsense2-camera
 
-# Verifikasi
-rs-enumerate-devices | head -5
+# Verifikasi package ROS tersedia
+ros2 pkg prefix realsense2_camera
+ros2 pkg executables realsense2_camera
 ```
+
+> Di Jetson/Jazzy, paket ini otomatis menarik `ros-jazzy-librealsense2`.
+> Paket Ubuntu `librealsense2-dev`/`librealsense2-udev-rules` bisa saja tidak
+> tersedia di repo device ini, jadi jangan jadikan syarat install utama.
 
 ---
 
@@ -71,7 +78,7 @@ rs-enumerate-devices | head -5
 > ```bash
 > cd /path/ke/workspace/baru
 > rm -rf install/ build/ log/
-> source /opt/ros/humble/setup.bash
+> source /opt/ros/jazzy/setup.bash
 > colcon build --packages-select fiducial_detector --cmake-args -DCMAKE_BUILD_TYPE=Release
 > source install/setup.bash
 > ```
@@ -80,11 +87,11 @@ rs-enumerate-devices | head -5
 
 ```bash
 # Masuk ke direktori workspace
-cd ~/Documents/vtol/vtol\ aruco/fiducial_ws
+cd ~/fiducial_ws
 # (Ganti path di atas sesuai lokasi workspace aktual di device kamu)
 
 # Source ROS 2 base
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 
 # Build
 colcon build --packages-select fiducial_detector \
@@ -98,10 +105,15 @@ source install/setup.bash
 
 ```bash
 colcon build --packages-select fiducial_detector \
-  --cmake-args -DCMAKE_BUILD_TYPE=Release -DUSE_REALSENSE=ON
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DUSE_REALSENSE=OFF
 
 source install/setup.bash
 ```
+
+`realsense.launch.xml` memakai node resmi `realsense2_camera`, jadi build ini
+tetap mendukung Intel RealSense. `-DUSE_REALSENSE=ON` hanya diperlukan untuk
+mode direct-librealsense di `capture_node source:=realsense`, dan membutuhkan
+development files `librealsense2`.
 
 ### Build dengan CUDA GPU Acceleration (opsional)
 
@@ -119,8 +131,8 @@ source install/setup.bash
 
 ```bash
 # Setiap kali buka terminal baru, wajib source dua baris ini:
-source /opt/ros/humble/setup.bash
-source ~/Documents/vtol/vtol\ aruco/fiducial_ws/install/setup.bash
+source /opt/ros/jazzy/setup.bash
+source ~/fiducial_ws/install/setup.bash
 ```
 
 ### Validasi Setelah Build
@@ -166,7 +178,7 @@ HP Wide Vision HD Camera (usb-0000:06:00.3-3):
 | `webcam.launch.xml` | USB webcam / laptop camera via `capture_node` C++ terpisah |
 | `realsense.launch.xml` | Intel RealSense D4xx via `realsense2_camera` package |
 | `ros_topic.launch.xml` | Subscribe ke ROS topic yang sudah ada |
-| `calibration.launch.xml` | Kalibrasi kamera via ChArUco board |
+| `calibration.launch.xml` | Kalibrasi kamera via chessboard |
 | `dict_test.launch.xml` | Validasi DICT_7X7_50 50/50 |
 
 ---
@@ -224,20 +236,20 @@ Menggunakan paket `realsense2_camera` resmi sebagai driver kamera.
 ### Prasyarat
 
 ```bash
-sudo apt install ros-humble-realsense2-camera
-rs-enumerate-devices | head -5  # verifikasi kamera terdeteksi
+sudo apt install ros-jazzy-realsense2-camera
+ros2 pkg executables realsense2_camera  # harus menampilkan realsense2_camera_node
 ```
 
 ### Contoh Perintah
 
 ```bash
-# Default: DICT_7X7_50, 640x480 @ 30fps, tanpa GUI
+# Default aman untuk USB2/Jetson: DICT_7X7_50, 424x240 @ 15fps, YUYV, tanpa GUI
 ros2 launch fiducial_detector realsense.launch.xml
 
 # Dengan preview window
 ros2 launch fiducial_detector realsense.launch.xml show_window:=true
 
-# FPS mode: profil 30 FPS yang umum didukung RealSense
+# FPS mode: gunakan hanya jika RealSense terhubung sebagai USB3/SuperSpeed
 ros2 launch fiducial_detector realsense.launch.xml \
   width:=640 height:=480 fps_limit:=30 show_window:=true
 
@@ -258,14 +270,83 @@ ros2 launch fiducial_detector realsense.launch.xml \
 
 | Argument | Default | Keterangan |
 |---|---|---|
-| `width` / `height` | `640`/`480` | Resolusi color stream |
-| `fps_limit` | `30` | FPS kamera (harus integer) |
+| `width` / `height` | `424`/`240` | Resolusi color stream |
+| `fps_limit` | `15` | FPS kamera (harus integer) |
 | `marker_size` | `0.05` | Ukuran fisik marker (metre) |
 | `show_window` | `false` | Tampilkan jendela OpenCV |
 | `cuda` | `false` | GPU preprocessing |
+| `color_format` | `YUYV` | Format color stream RealSense |
 
 > **Camera topic:** `/camera/camera/color/image_raw`  
-> Warning IMU calibration (`ds-calib-parsers.cpp:36`) saat startup adalah normal — tidak mempengaruhi color stream.
+> Launch ini menonaktifkan depth, infrared, gyro, dan accel. Untuk fiducial,
+> hanya color stream yang dipakai. Default `424x240@15` + `YUYV` dipilih agar
+> tetap hidup di USB2/Jetson; naikkan resolusi/FPS hanya jika link USB stabil.
+>
+> Warning IMU calibration (`ds-calib-parsers.cpp:36`) saat startup adalah normal
+> jika motion stream tidak dipakai.
+
+### RealSense/Jetson: Jika `show_window:=true` Tidak Keluar
+
+`show_window` hanya bisa muncul setelah `aruco_node` menerima frame. Jika log
+RealSense menulis `Incomplete video frame detected`, `Frame Corrupted`,
+`Frames didn't arrived within 5 seconds`, atau kamera terlihat "up" tapi window
+tidak muncul, cek frame fisik dulu.
+
+```bash
+# 1) Pastikan RealSense terdeteksi dan lihat speed USB.
+lsusb -t
+
+# Ideal untuk D455: 5000M/SuperSpeed.
+# Jika hanya 480M/high-speed atau ROS menulis "Device USB type: 2.1",
+# pakai default ringan dulu: 424x240@15 YUYV.
+
+# 2) Cari node RGB RealSense. Pada D455 sering: /dev/video4.
+v4l2-ctl --list-devices
+v4l2-ctl -d /dev/video4 --list-formats-ext
+
+# 3) Tes frame RGB langsung dari V4L2.
+timeout 8s v4l2-ctl -d /dev/video4 \
+  --set-fmt-video=width=424,height=240,pixelformat=YUYV \
+  --set-parm=15 \
+  --stream-mmap --stream-count=5 \
+  --stream-to=/tmp/realsense_color.raw
+
+ls -lh /tmp/realsense_color.raw
+```
+
+Jika file `/tmp/realsense_color.raw` berukuran `0`, masalahnya ada di USB/kamera,
+bukan di `show_window`. Coba reset USB tanpa cabut kabel:
+
+```bash
+# Ganti 1-2 sesuai port RealSense dari lsusb -t atau dmesg.
+sudo bash -lc 'echo 0 > /sys/bus/usb/devices/1-2/authorized; sleep 2; echo 1 > /sys/bus/usb/devices/1-2/authorized'
+```
+
+Setelah reset, tes lagi:
+
+```bash
+ros2 launch fiducial_detector realsense.launch.xml show_window:=true
+
+# Di terminal lain:
+ros2 topic echo /camera/camera/color/image_raw --once \
+  --qos-reliability reliable --field encoding
+ros2 topic echo /fiducial/fps --once
+```
+
+Output sehat biasanya:
+
+```text
+encoding: yuv422_yuy2
+data: 14.x
+```
+
+Jika masih muncul frame corrupt:
+- pindahkan RealSense ke port USB3 langsung di device, bukan hub,
+- ganti kabel USB3 yang pendek dan bagus,
+- jangan jalankan depth/infra/IMU bersamaan saat masih di USB2,
+- tetap pakai `width:=424 height:=240 fps_limit:=15 color_format:=YUYV`,
+- di Jetson, pastikan power supply cukup dan hindari port/hub yang berbagi daya
+  dengan perangkat lain.
 
 ### Catatan Marker Kecil
 
@@ -281,9 +362,14 @@ Jika log tersebut hanya muncul saat board dekat kamera, penyebab umumnya adalah:
 - exposure terlalu pendek akibat FPS tinggi,
 - cahaya kurang atau glare pada kertas.
 
-Jika log RealSense menulis `Given value ... is invalid` lalu fallback ke `640x480x15`, maka kamera memang tidak memakai profil yang diminta dan output tidak akan bisa tembus 20 FPS. Gunakan profil valid, misalnya `width:=640 height:=480 fps_limit:=30`, lalu cek log `Open profile`.
+Jika log RealSense menulis `Given value ... is invalid` lalu fallback ke profil
+lain, kamera memang tidak memakai profil yang diminta. Cek baris `Open profile`
+di terminal. Untuk USB2/Jetson, gunakan default `424x240@15 YUYV`; untuk USB3
+yang stabil boleh naik ke `640x480@30` atau `1280x720@15` jika profil itu
+tersedia.
 
-Solusi praktis: untuk FPS pakai `640x480@30`; untuk marker kecil pakai `1280x720@15` hanya jika device mendukung dan kamu rela FPS lebih rendah.
+Solusi praktis: mulai dari default ringan dulu sampai frame stabil, lalu naikkan
+resolusi/FPS bertahap sambil memantau `/fiducial/fps` dan log RealSense.
 
 ---
 
@@ -319,13 +405,17 @@ ros2 launch fiducial_detector ros_topic.launch.xml \
 
 ## 8. calibration.launch.xml
 
-Kalibrasi kamera menggunakan ChArUco board terintegrasi.  
+Kalibrasi kamera menggunakan chessboard.  
 Menghasilkan file YAML berisi `camera_matrix` dan `dist_coeffs`.
+
+Default launch memakai mode `CHESSBOARD` dengan papan 9x6 inner corners dan
+ukuran kotak 0.025 m. Gunakan chessboard cetak yang kaku/rata, lalu ambil frame
+dari banyak sudut dan jarak.
 
 ### Contoh Perintah
 
 ```bash
-# Default: simpan ke /tmp/camera_calib.yaml
+# Default: simpan ke /tmp/camera_calibration.yaml
 ros2 launch fiducial_detector calibration.launch.xml
 
 # Output ke path custom
@@ -336,14 +426,19 @@ ros2 launch fiducial_detector calibration.launch.xml \
 ros2 launch fiducial_detector calibration.launch.xml \
   camera_topic:=/camera/camera/color/image_raw \
   output_yaml:=/home/arilix/calib_realsense.yaml
+
+# Ubah ukuran chessboard jika papanmu berbeda
+ros2 launch fiducial_detector calibration.launch.xml \
+  chess_cols:=9 chess_rows:=6 chess_square:=0.025
 ```
 
 ### Keyboard Control
 
 | Key | Aksi |
 |---|---|
-| `SPACE` | Capture frame kalibrasi (butuh min. 20 frame berbeda sudut) |
-| `s` | Hitung kalibrasi dan simpan ke YAML |
+| `SPACE` | Capture frame kalibrasi (minimal 15 frame, lebih banyak lebih baik) |
+| `c` | Hitung kalibrasi |
+| `s` | Simpan hasil kalibrasi ke YAML |
 | `q` / `ESC` | Keluar tanpa menyimpan |
 
 ### Setelah Kalibrasi
@@ -467,11 +562,14 @@ enable_blur:          false
 | `source install/setup.bash` not found | Belum pernah build | Jalankan `colcon build` terlebih dahulu |
 | FPS rendah | Resolusi tinggi / show_window aktif | `show_window:=false`, kurangi resolusi |
 | Deteksi tidak stabil | Pencahayaan buruk / tolerance kecil | Naikkan `alignment_tolerance`, tambah lampu |
-| RealSense mentok 15 FPS | Profile launch invalid, driver fallback `640x480x15` | Pakai `width:=640 height:=480 fps_limit:=30`; cek log `Open profile` |
+| RealSense mentok 15 FPS | Kamera terhubung sebagai USB2 (`Device USB type: 2.1`) | Ini normal untuk default aman. Pakai USB3/SuperSpeed jika ingin `640x480@30` |
+| RealSense frame corrupt | USB/kabel/hub tidak stabil; log `Incomplete video frame detected` atau UVC `-71` | Pakai `424x240@15 YUYV`, reset USB, pindah port USB3 langsung, ganti kabel |
+| `show_window:=true` tidak muncul pada RealSense | Tidak ada frame masuk ke `aruco_node`; window hanya dibuat setelah frame pertama | Cek `ros2 topic echo /camera/camera/color/image_raw --once --qos-reliability reliable --field encoding`, lalu cek `/fiducial/fps` |
+| RealSense topic ada tapi tidak ada frame | Stream RGB macet di V4L2/USB | Tes `v4l2-ctl -d /dev/video4 --stream-mmap --stream-count=5`; jika output 0 byte, reset USB atau cabut-pasang |
 | Marker kecil harus dekat | Resolusi piksel kecil kurang / blur / exposure | Pakai resolusi tinggi jika didukung, atau dekatkan board dan tambah cahaya |
 | Marker kecil flicker | Small-tab rescue hanya intermittent | Cek log `Predictive small-tab detected ID=...`; stabilizer menahan small marker 14 frame |
 | `solvePnP` failed / pose tidak akurat | Intrinsik kamera placeholder | Jalankan `calibration.launch.xml` → update `detector.yaml` |
-| RealSense tidak terbuka | Build flag salah | Rebuild dengan `-DUSE_REALSENSE=ON` |
+| RealSense tidak terbuka | Driver/package atau USB bermasalah | Cek `ros2 pkg executables realsense2_camera`, `lsusb -t`, dan log `realsense2_camera_node` |
 | `cuda:=true` tapi warning | OpenCV tanpa CUDA | Rebuild `-DUSE_CUDA=ON` atau OpenCV perlu dikompilasi ulang |
 | Window tidak muncul di SSH | DISPLAY tidak di-set | `export DISPLAY=:0` sebelum launch |
 | Marker tidak terdeteksi | Dictionary tidak cocok | Sesuaikan dictionary dengan marker yang dicetak (`DICT_7X7_50`) |

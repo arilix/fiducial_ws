@@ -23,7 +23,7 @@ static cv::Mat generateMarkerImage(
 }
 
 static cv::Ptr<cv::aruco::DetectorParameters> make7x7Params() {
-    auto p = cv::aruco::DetectorParameters::create();
+    auto p = fiducial_opencv_compat::makeDetectorParameters();
     // Perspective normalization optimized for 7×7 grid resolution
     p->perspectiveRemovePixelPerCell          = 10;
     p->perspectiveRemoveIgnoredMarginPerCell  = 0.10;
@@ -57,7 +57,7 @@ int main(int /*argc*/, char** /*argv*/) {
     std::printf("  DICT_7X7_50 Validation — ID 0 to %d\n", NUM_MARKERS - 1);
     std::printf("%s\n", dash.c_str());
 
-    auto dict   = cv::aruco::getPredefinedDictionary(DICT_ID);
+    auto dict   = fiducial_opencv_compat::getPredefinedDictionary(DICT_ID);
     auto params = make7x7Params();
 
     // Validate dictionary metadata before running per-ID tests

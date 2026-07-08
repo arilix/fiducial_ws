@@ -1,7 +1,10 @@
 #include "utils/aruco.h"
 #include "utils/marker_decoder.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <fstream>
+#include <filesystem>
 #include <opencv2/imgproc.hpp>
 #include <tf2/LinearMath/Quaternion.hpp>
 #include <limits>
@@ -9,82 +12,31 @@
 namespace fiducial_detector {
 namespace {
 
-cv::Ptr<cv::aruco::DetectorParameters> cloneDetectorParams(
-    const cv::Ptr<cv::aruco::DetectorParameters>& src)
+bool hailoDevicePresent()
 {
-    auto dst = cv::aruco::DetectorParameters::create();
-    if (src) *dst = *src;
-    return dst;
-}
+    if (std::filesystem::exists("/dev/hailo0")
+        || std::filesystem::exists("/dev/hailo1")
+        || std::filesystem::exists("/dev/hailo10h")) {
+        return true;
+    }
 
-float markerArea(const std::vector<cv::Point2f>& corners)
-{
-    return corners.size() == 4
-        ? std::abs(static_cast<float>(cv::contourArea(corners)))
-        : 0.f;
-}
-
-cv::Point2f markerCenter(const std::vector<cv::Point2f>& corners)
-{
-    cv::Point2f center(0.f, 0.f);
-    if (corners.empty()) return center;
-    for (const auto& pt : corners) center += pt;
-    center *= 1.f / static_cast<float>(corners.size());
-    return center;
-}
-
-bool isSimilarRoi(const cv::Rect& a, const cv::Rect& b)
-{
-    const cv::Rect overlap = a & b;
-    if (overlap.empty()) return false;
-    const double overlap_area = static_cast<double>(overlap.area());
-    const double min_area = static_cast<double>(std::min(a.area(), b.area()));
-    return min_area > 0.0 && overlap_area / min_area > 0.75;
-}
-
-bool appendUniqueMarker(
-    std::vector<std::vector<cv::Point2f>>& corners,
-    std::vector<int>& ids,
-    std::vector<cv::Point2f> candidate,
-    int id)
-{
-    const cv::Point2f candidate_center = markerCenter(candidate);
-    const float candidate_side = std::sqrt(std::max(1.f, markerArea(candidate)));
-    const float min_dist = std::max(8.f, candidate_side * 0.35f);
-
-    for (std::size_t i = 0; i < corners.size(); ++i) {
-        if (ids[i] != id) continue;
-        const cv::Point2f existing_center = markerCenter(corners[i]);
-        if (cv::norm(candidate_center - existing_center) < min_dist) {
-            return false;
+    const std::filesystem::path pci_devices("/sys/bus/pci/devices");
+    if (!std::filesystem::exists(pci_devices)) return false;
+    for (const auto& entry : std::filesystem::directory_iterator(pci_devices)) {
+        std::ifstream vendor_file(entry.path() / "vendor");
+        std::string vendor;
+        if (vendor_file >> vendor) {
+            std::transform(vendor.begin(), vendor.end(), vendor.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (vendor == "0x1e60") return true;
         }
     }
-
-    corners.push_back(std::move(candidate));
-    ids.push_back(id);
-    return true;
+    return false;
 }
 
-void whitenSeam(cv::Mat& image, bool vertical, int seam_pos, int strip)
+std::string trackingKey(const DetectedMarker& marker)
 {
-    if (image.empty()) return;
-    strip = std::max(4, strip);
-    if (vertical) {
-        const int x0 = std::clamp(seam_pos - strip / 2, 0, image.cols - 1);
-        const int x1 = std::clamp(seam_pos + strip / 2, 0, image.cols);
-        if (x1 > x0) image(cv::Rect(x0, 0, x1 - x0, image.rows)).setTo(255);
-    } else {
-        const int y0 = std::clamp(seam_pos - strip / 2, 0, image.rows - 1);
-        const int y1 = std::clamp(seam_pos + strip / 2, 0, image.rows);
-        if (y1 > y0) image(cv::Rect(0, y0, image.cols, y1 - y0)).setTo(255);
-    }
-}
-
-std::string trackingKey(const DetectedMarker& marker, float max_area)
-{
-    const float area = markerArea(marker.corners);
-    const char* scale_tag = area >= max_area * 0.45f ? "big" : "small";
-    return std::to_string(marker.id) + ":" + scale_tag;
+    return std::to_string(marker.id);
 }
 
 } // namespace
@@ -120,7 +72,7 @@ FiducialDetector::FiducialDetector(const rclcpp::NodeOptions& options)
         std::bind(&FiducialDetector::watchdogCallback, this));
 
     RCLCPP_INFO(get_logger(), "═══════════════════════════════════════");
-    RCLCPP_INFO(get_logger(), " DICT_7X7_50 Gate Centering — ROS2 Humble");
+    RCLCPP_INFO(get_logger(), " DICT_7X7_50 Gate Centering - ROS2 Jazzy");
     RCLCPP_INFO(get_logger(), "═══════════════════════════════════════");
     RCLCPP_INFO(get_logger(), "  camera_topic : %s", camera_topic_.c_str());
     RCLCPP_INFO(get_logger(), "  marker_size  : %.3f m", marker_size_);
@@ -152,6 +104,7 @@ void FiducialDetector::declareParameters() {
     declare_parameter("show_rejected",        true);
     declare_parameter("alignment_tolerance",  50);
     declare_parameter("smoothing_alpha",      0.4);
+    declare_parameter("min_detection_confidence", 0.70);
     declare_parameter("max_missed_frames",    5);
     declare_parameter("alignment_stable_frames", 10);
     declare_parameter("camera_matrix",  std::vector<double>{
@@ -160,11 +113,14 @@ void FiducialDetector::declareParameters() {
     declare_parameter("show_corner_labels",     true);
     declare_parameter("show_orientation_arrow", true);
     declare_parameter("show_confidence",        true);
+    declare_parameter("publish_debug_image",    true);
+    declare_parameter("output_frame_id",        std::string(""));
     declare_parameter("enable_clahe",           true);
     declare_parameter("clahe_clip_limit",       2.0);
     declare_parameter("enable_sharpen",         false);
     declare_parameter("enable_blur",            false);
-    declare_parameter("cuda",                   false);          // true/false
+    declare_parameter("npu",                    false);
+    declare_parameter("cuda",                   false);          // legacy alias for npu
     declare_parameter("capture_internal",       false);
     declare_parameter("capture_device_id",      0);
     declare_parameter("capture_device_path",    std::string(""));
@@ -182,17 +138,23 @@ void FiducialDetector::loadRosParams() {
     show_rejected_           = get_parameter("show_rejected").as_bool();
     alignment_tolerance_     = get_parameter("alignment_tolerance").as_int();
     smoothing_alpha_         = get_parameter("smoothing_alpha").as_double();
+    min_detection_confidence_ = get_parameter("min_detection_confidence").as_double();
     max_missed_frames_       = get_parameter("max_missed_frames").as_int();
     alignment_stable_frames_ = get_parameter("alignment_stable_frames").as_int();
     show_corner_labels_      = get_parameter("show_corner_labels").as_bool();
     show_orientation_arrow_  = get_parameter("show_orientation_arrow").as_bool();
     show_confidence_         = get_parameter("show_confidence").as_bool();
+    publish_debug_image_     = get_parameter("publish_debug_image").as_bool();
+    output_frame_id_         = get_parameter("output_frame_id").as_string();
     enable_clahe_            = get_parameter("enable_clahe").as_bool();
     clahe_clip_              = get_parameter("clahe_clip_limit").as_double();
     enable_sharpen_          = get_parameter("enable_sharpen").as_bool();
     enable_blur_             = get_parameter("enable_blur").as_bool();
-    {
-        use_cuda_enabled_ = get_parameter("cuda").as_bool();
+    use_npu_enabled_          = get_parameter("npu").as_bool();
+    if (get_parameter("cuda").as_bool()) {
+        use_npu_enabled_ = true;
+        RCLCPP_WARN(get_logger(),
+            "Parameter 'cuda' is deprecated on Raspberry Pi; treating it as npu:=true");
     }
     capture_internal_        = get_parameter("capture_internal").as_bool();
     capture_device_id_       = get_parameter("capture_device_id").as_int();
@@ -227,8 +189,8 @@ void FiducialDetector::initDetectors() {
     aruco_dict_ = dict_manager_->activeDict();
     dict_manager_->printStartupValidation("DICT_7X7_50");
 
-    det_params_mgr_->bind(this);
     det_params_mgr_->apply7x7Profile();
+    det_params_mgr_->bind(this);
 
     if (!dict_manager_->validateDictionary("DICT_7X7_50")) {
         RCLCPP_WARN(get_logger(), "DICT_7X7_50 validation failed");
@@ -238,35 +200,18 @@ void FiducialDetector::initDetectors() {
         clahe_ = cv::createCLAHE(clahe_clip_, cv::Size(8, 8));
     }
 
-#ifdef FIDUCIAL_USE_CUDA
-    // Probe CUDA device availability at startup
-    if (use_cuda_enabled_) {
-        int cuda_devs = cv::cuda::getCudaEnabledDeviceCount();
-        if (cuda_devs > 0) {
-            cv::cuda::setDevice(0);
-            cv::cuda::DeviceInfo di(0);
-            cuda_ok_ = true;
-            if (enable_clahe_) {
-                // CLAHE on GPU: same clip limit, 8×8 tile grid
-                cuda_clahe_ = cv::cuda::createCLAHE(clahe_clip_, cv::Size(8, 8));
-            }
+    if (use_npu_enabled_) {
+        npu_available_ = hailoDevicePresent();
+        if (npu_available_) {
             RCLCPP_INFO(get_logger(),
-                "CUDA preprocessing: ENABLED — %s (%d MB free)",
-                di.name(), static_cast<int>(di.freeMemory() / 1024 / 1024));
+                "Hailo NPU: detected. ArUco preprocessing remains CPU because no HEF model is used.");
         } else {
             RCLCPP_WARN(get_logger(),
-                "CUDA: no GPU detected — falling back to CPU preprocessing");
+                "npu:=true requested but no /dev/hailo* device was found; continuing on CPU");
         }
     } else {
-        RCLCPP_INFO(get_logger(), "CUDA preprocessing: OFF (launch with cuda:=on to enable)");
+        RCLCPP_INFO(get_logger(), "Hailo NPU: OFF (launch with npu:=true to probe device)");
     }
-#else
-    if (use_cuda_enabled_) {
-        RCLCPP_WARN(get_logger(),
-            "cuda:=on requested but binary not compiled with USE_CUDA=ON — "
-            "rebuild: colcon build --cmake-args -DUSE_CUDA=ON");
-    }
-#endif
 
     pose_estimator_ = std::make_unique<PoseEstimator>(
         intrinsics_.K, intrinsics_.D, marker_size_);
@@ -297,7 +242,7 @@ void FiducialDetector::initPublishers() {
 }
 
 void FiducialDetector::initSubscriber() {
-    auto qos = rclcpp::QoS(rclcpp::KeepLast(5)).best_effort();
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(5)).reliable();
     image_sub_ = image_transport::create_subscription(
         this, camera_topic_,
         std::bind(&FiducialDetector::imageCallback, this, std::placeholders::_1),
@@ -312,13 +257,33 @@ void FiducialDetector::imageCallback(
     // Serialize callback — no parallel detection on same frame
     std::lock_guard<std::mutex> cb_lock(callback_mutex_);
     cam_connected_   = true;
-    last_frame_time_ = msg->header.stamp;
+    last_frame_time_ = now();
 
     cv::Mat frame;
     try {
-        frame = cv_bridge::toCvShare(msg, "bgr8")->image.clone();
+        const auto cv_ptr = cv_bridge::toCvShare(msg);
+        const cv::Mat& src = cv_ptr->image;
+        const std::string& enc = msg->encoding;
+
+        if (enc == "bgr8") {
+            frame = src.clone();
+        } else if (enc == "rgb8") {
+            cv::cvtColor(src, frame, cv::COLOR_RGB2BGR);
+        } else if (enc == "mono8") {
+            cv::cvtColor(src, frame, cv::COLOR_GRAY2BGR);
+        } else if (enc == "yuv422_yuy2" || enc == "yuyv" || enc == "YUYV") {
+            cv::cvtColor(src, frame, cv::COLOR_YUV2BGR_YUY2);
+        } else if (enc == "uyvy" || enc == "UYVY") {
+            cv::cvtColor(src, frame, cv::COLOR_YUV2BGR_UYVY);
+        } else {
+            frame = cv_bridge::toCvShare(msg, "bgr8")->image.clone();
+        }
     } catch (const cv_bridge::Exception& e) {
         RCLCPP_ERROR(get_logger(), "cv_bridge: %s", e.what());
+        return;
+    } catch (const cv::Exception& e) {
+        RCLCPP_ERROR(get_logger(), "OpenCV image conversion failed for encoding '%s': %s",
+            msg->encoding.c_str(), e.what());
         return;
     }
     if (frame.empty()) {
@@ -332,7 +297,19 @@ void FiducialDetector::imageCallback(
     DetectionResult result = runDetection(frame);
     estimatePoses(result);
     computeConfidence(result);
+    result.markers.erase(
+        std::remove_if(result.markers.begin(), result.markers.end(),
+            [this](const DetectedMarker& marker) {
+                return marker.confidence.aggregate < min_detection_confidence_;
+            }),
+        result.markers.end());
     stabilizeDetections(result);
+    result.markers.erase(
+        std::remove_if(result.markers.begin(), result.markers.end(),
+            [this](const DetectedMarker& marker) {
+                return marker.confidence.aggregate < min_detection_confidence_;
+            }),
+        result.markers.end());
 
     GateError gate_err;
     if (!result.markers.empty()) {
@@ -438,45 +415,8 @@ void FiducialDetector::watchdogCallback() {
 cv::Mat FiducialDetector::preprocessFrame(const cv::Mat& gray) {
     cv::Mat processed = gray;
 
-#ifdef FIDUCIAL_USE_CUDA
-    if (use_cuda_enabled_ && cuda_ok_) {
-        try {
-            cv::cuda::GpuMat gpu;
-            gpu.upload(processed);
-
-            if (enable_clahe_ && cuda_clahe_) {
-                // CLAHE on GPU: equalizes local contrast for low-light/glare scenes
-                cv::cuda::GpuMat gpu_eq;
-                cuda_clahe_->apply(gpu, gpu_eq);
-                gpu = gpu_eq;
-            }
-            if (enable_blur_) {
-                auto blur_f = cv::cuda::createGaussianFilter(
-                    gpu.type(), gpu.type(), cv::Size(3, 3), 0);
-                cv::cuda::GpuMat gpu_blurred;
-                blur_f->apply(gpu, gpu_blurred);
-                gpu = gpu_blurred;
-            }
-            if (enable_sharpen_) {
-                // Unsharp mask: sharpened = 1.5*orig - 0.5*blurred
-                auto blur_f = cv::cuda::createGaussianFilter(
-                    gpu.type(), gpu.type(), cv::Size(0, 0), 3);
-                cv::cuda::GpuMat gpu_blurred;
-                blur_f->apply(gpu, gpu_blurred);
-                cv::cuda::GpuMat gpu_sharp;
-                cv::cuda::addWeighted(gpu, 1.5, gpu_blurred, -0.5, 0, gpu_sharp);
-                gpu = gpu_sharp;
-            }
-            gpu.download(processed);
-            return processed;
-        } catch (const cv::Exception& e) {
-            RCLCPP_WARN_ONCE(get_logger(),
-                "CUDA preprocessing error: %s — falling back to CPU", e.what());
-        }
-    }
-#endif
-
-    // CPU fallback path
+    // CPU preprocessing path. Hailo AI HAT accelerates compiled neural-network
+    // models, not these OpenCV image filters.
     if (enable_clahe_ && clahe_) {
         cv::Mat enhanced;
         // CLAHE equalizes local contrast — critical for low-light and high-glare scenes
@@ -512,48 +452,6 @@ void FiducialDetector::detectAruco(const cv::Mat& gray, DetectionResult& result)
     cv::aruco::detectMarkers(gray, aruco_dict_, corners, ids, dp, rejected);
     result.rejected.insert(result.rejected.end(), rejected.begin(), rejected.end());
 
-    const bool rescue_frame = (frame_count_ % 3 == 0);
-    if (rescue_frame && !rejected.empty()) {
-        splitCombinedBoard(gray, corners, ids, rejected);
-    }
-    if (rescue_frame && !corners.empty()) {
-        detectTopTabMarkers(gray, corners, ids);
-    }
-    if (corners.empty() && frame_count_ % 10 == 0) {
-        cv::Mat upscaled;
-        constexpr double FULL_SCALE = 1.5;
-        cv::resize(gray, upscaled, cv::Size(), FULL_SCALE, FULL_SCALE, cv::INTER_CUBIC);
-
-        cv::Mat blurred, sharpened;
-        cv::GaussianBlur(upscaled, blurred, cv::Size(0, 0), 1.2);
-        cv::addWeighted(upscaled, 1.7, blurred, -0.7, 0, sharpened);
-
-        auto small_dp = cloneDetectorParams(dp);
-        small_dp->minMarkerPerimeterRate = 0.004;
-        small_dp->adaptiveThreshWinSizeMin = 3;
-        small_dp->adaptiveThreshWinSizeMax = 27;
-        small_dp->adaptiveThreshWinSizeStep = 2;
-        small_dp->perspectiveRemovePixelPerCell = 16;
-        small_dp->maxErroneousBitsInBorderRate = 0.55;
-        small_dp->errorCorrectionRate = 0.75;
-        small_dp->minMarkerDistanceRate = 0.005;
-
-        std::vector<int> full_ids;
-        std::vector<std::vector<cv::Point2f>> full_corners, full_rejected;
-        cv::aruco::detectMarkers(
-            sharpened, aruco_dict_, full_corners, full_ids, small_dp, full_rejected);
-        result.rejected.insert(result.rejected.end(), full_rejected.begin(), full_rejected.end());
-
-        for (std::size_t i = 0; i < full_ids.size(); ++i) {
-            auto mapped = full_corners[i];
-            for (auto& pt : mapped) {
-                pt.x = static_cast<float>(pt.x / FULL_SCALE);
-                pt.y = static_cast<float>(pt.y / FULL_SCALE);
-            }
-            appendUniqueMarker(corners, ids, std::move(mapped), full_ids[i]);
-        }
-    }
-
     result.markers.reserve(ids.size());
     for (std::size_t i = 0; i < ids.size(); ++i) {
         DetectedMarker m;
@@ -562,323 +460,6 @@ void FiducialDetector::detectAruco(const cv::Mat& gray, DetectionResult& result)
         m.corners = corners[i];
         m.center  = computeCenter(corners[i]);
         result.markers.push_back(std::move(m));
-    }
-}
-
-void FiducialDetector::splitCombinedBoard(
-    const cv::Mat& gray,
-    std::vector<std::vector<cv::Point2f>>& corners,
-    std::vector<int>& ids,
-    std::vector<std::vector<cv::Point2f>>& rejected)
-{
-    auto dp = cloneDetectorParams(det_params_mgr_->params());
-    dp->minMarkerPerimeterRate = 0.004;
-    dp->adaptiveThreshWinSizeMin = 3;
-    dp->adaptiveThreshWinSizeMax = 31;
-    dp->adaptiveThreshWinSizeStep = 2;
-    dp->perspectiveRemovePixelPerCell = 14;
-    dp->maxErroneousBitsInBorderRate = 0.55;
-    dp->errorCorrectionRate = 0.75;
-    dp->minMarkerDistanceRate = 0.005;
-
-    std::vector<cv::Rect> rois;
-    const cv::Rect frame_bounds(0, 0, gray.cols, gray.rows);
-    for (const auto& candidate : rejected) {
-        if (candidate.size() != 4) continue;
-        cv::Rect roi = cv::boundingRect(candidate);
-        if (roi.area() < 100) continue;
-
-        const int pad = std::max(8, std::max(roi.width, roi.height) / 3);
-        roi.x -= pad;
-        roi.y -= pad;
-        roi.width += pad * 2;
-        roi.height += pad * 2;
-        roi &= frame_bounds;
-        if (roi.empty()) continue;
-
-        bool duplicate = false;
-        for (const auto& existing : rois) {
-            if (isSimilarRoi(existing, roi)) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (!duplicate) rois.push_back(roi);
-        if (rois.size() >= 18) break;
-    }
-
-    for (const auto& roi : rois) {
-        cv::Mat crop = gray(roi).clone();
-        cv::equalizeHist(crop, crop);
-
-        const int border = std::max(10, std::min(crop.cols, crop.rows) / 5);
-        cv::Mat padded;
-        cv::copyMakeBorder(crop, padded, border, border, border, border,
-                           cv::BORDER_CONSTANT, cv::Scalar(255));
-
-        const int max_dim = std::max(padded.cols, padded.rows);
-        double scale = 1.0;
-        if (max_dim < 80) scale = 5.0;
-        else if (max_dim < 130) scale = 4.0;
-        else if (max_dim < 220) scale = 2.5;
-
-        cv::Mat detect_img;
-        cv::resize(padded, detect_img, cv::Size(), scale, scale,
-                   scale > 2.0 ? cv::INTER_CUBIC : cv::INTER_LINEAR);
-
-        cv::Mat blurred, sharpened, binary;
-        cv::GaussianBlur(detect_img, blurred, cv::Size(0, 0), 1.0);
-        cv::addWeighted(detect_img, 1.7, blurred, -0.7, 0, sharpened);
-        cv::threshold(sharpened, binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-
-        for (const auto& img : {sharpened, binary}) {
-            std::vector<int> local_ids;
-            std::vector<std::vector<cv::Point2f>> local_corners, local_rejected;
-            cv::aruco::detectMarkers(
-                img, aruco_dict_, local_corners, local_ids, dp, local_rejected);
-            for (std::size_t i = 0; i < local_ids.size(); ++i) {
-                auto mapped = local_corners[i];
-                for (auto& pt : mapped) {
-                    pt.x = static_cast<float>((pt.x / scale) - border + roi.x);
-                    pt.y = static_cast<float>((pt.y / scale) - border + roi.y);
-                }
-                appendUniqueMarker(corners, ids, std::move(mapped), local_ids[i]);
-            }
-        }
-    }
-}
-
-void FiducialDetector::detectTopTabMarkers(
-    const cv::Mat& gray,
-    std::vector<std::vector<cv::Point2f>>& corners,
-    std::vector<int>& ids)
-{
-    if (corners.empty()) return;
-
-    float max_area = 0.f;
-    for (const auto& marker : corners) {
-        max_area = std::max(max_area, markerArea(marker));
-    }
-    if (max_area <= 0.f) return;
-
-    auto dp = cloneDetectorParams(det_params_mgr_->params());
-    dp->minMarkerPerimeterRate = 0.003;
-    dp->adaptiveThreshWinSizeMin = 3;
-    dp->adaptiveThreshWinSizeMax = 25;
-    dp->adaptiveThreshWinSizeStep = 2;
-    dp->adaptiveThreshConstant = 5.0;
-    dp->minDistanceToBorder = 1;
-    dp->minMarkerDistanceRate = 0.003;
-    dp->perspectiveRemovePixelPerCell = 18;
-    dp->perspectiveRemoveIgnoredMarginPerCell = 0.08;
-    dp->maxErroneousBitsInBorderRate = 0.60;
-    dp->errorCorrectionRate = 0.80;
-
-    struct TabRoi {
-        cv::Rect rect;
-        bool seam_vertical{false};
-        int seam_pos{0};
-        int big_side{0};
-    };
-    struct PredictiveRoi {
-        cv::Rect rect;
-        int big_side{0};
-    };
-
-    std::vector<TabRoi> tab_rois;
-    std::vector<PredictiveRoi> predictive_rois;
-    const bool heavy_rescue_frame = (frame_count_ % 3 == 0);
-    constexpr std::size_t MAX_PREDICTIVE_ROIS = 36;
-    const cv::Rect bounds(0, 0, gray.cols, gray.rows);
-    const int min_big_side = std::max(24, std::min(gray.cols, gray.rows) / 14);
-    const std::size_t original_count = corners.size();
-
-    for (std::size_t idx = 0; idx < original_count; ++idx) {
-        const float area = markerArea(corners[idx]);
-        if (area < max_area * 0.35f) continue;
-
-        cv::Rect marker_rect = cv::boundingRect(corners[idx]) & bounds;
-        const int big_side = std::min(marker_rect.width, marker_rect.height);
-        if (big_side < min_big_side) continue;
-
-        const int tab_w = std::max(24, static_cast<int>(marker_rect.width * 0.58));
-        const int tab_h = std::max(24, static_cast<int>(marker_rect.height * 0.58));
-        const int cx = marker_rect.x + marker_rect.width / 2;
-        const int cy = marker_rect.y + marker_rect.height / 2;
-        const int top = marker_rect.y;
-        const int bottom = marker_rect.y + marker_rect.height;
-        const int left = marker_rect.x;
-        const int right = marker_rect.x + marker_rect.width;
-        const int overlap_y = static_cast<int>(0.10 * marker_rect.height);
-        const int overlap_x = static_cast<int>(0.10 * marker_rect.width);
-        const int reach_y = static_cast<int>(0.48 * marker_rect.height);
-        const int reach_x = static_cast<int>(0.48 * marker_rect.width);
-
-        std::vector<TabRoi> candidates = {
-            {cv::Rect(cx - tab_w / 2, top - reach_y, tab_w, tab_h),
-             false, reach_y, big_side},
-            {cv::Rect(cx - tab_w / 2, bottom - overlap_y, tab_w, tab_h),
-             false, overlap_y, big_side},
-            {cv::Rect(left - reach_x, cy - tab_w / 2, tab_h, tab_w),
-             true, reach_x, big_side},
-            {cv::Rect(right - overlap_x, cy - tab_w / 2, tab_h, tab_w),
-             true, overlap_x, big_side},
-        };
-
-        for (auto candidate : candidates) {
-            candidate.rect &= bounds;
-            if (candidate.rect.width < 16 || candidate.rect.height < 16) continue;
-
-            bool duplicate = false;
-            for (const auto& existing : tab_rois) {
-                if (isSimilarRoi(existing.rect, candidate.rect)) {
-                    duplicate = true;
-                    break;
-                }
-            }
-            if (!duplicate) tab_rois.push_back(candidate);
-        }
-
-        if (heavy_rescue_frame) {
-            const double side_rates[] = {0.25, 0.30, 0.35, 0.40};
-            const double gap_rates[] = {-0.03, 0.02, 0.07};
-            const double x_offsets[] = {-0.08, 0.00, 0.08};
-            for (double side_rate : side_rates) {
-                if (predictive_rois.size() >= MAX_PREDICTIVE_ROIS) break;
-                const int side = std::max(18, static_cast<int>(big_side * side_rate));
-                for (double x_offset : x_offsets) {
-                    if (predictive_rois.size() >= MAX_PREDICTIVE_ROIS) break;
-                    const int shifted_cx = cx + static_cast<int>(big_side * x_offset);
-                    for (double gap_rate : gap_rates) {
-                        if (predictive_rois.size() >= MAX_PREDICTIVE_ROIS) break;
-                        cv::Rect bottom_roi(
-                            shifted_cx - side / 2,
-                            bottom + static_cast<int>(big_side * gap_rate),
-                            side,
-                            side);
-                        cv::Rect top_roi(
-                            shifted_cx - side / 2,
-                            top - side - static_cast<int>(big_side * gap_rate),
-                            side,
-                            side);
-
-                        std::vector<cv::Rect> predicted_positions = {top_roi, bottom_roi};
-                        for (auto roi : predicted_positions) {
-                            roi &= bounds;
-                            if (roi.width < 16 || roi.height < 16) continue;
-
-                            bool duplicate = false;
-                            for (const auto& existing : predictive_rois) {
-                                if (isSimilarRoi(existing.rect, roi)) {
-                                    duplicate = true;
-                                    break;
-                                }
-                            }
-                            if (!duplicate) predictive_rois.push_back({roi, big_side});
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    for (const auto& tab : tab_rois) {
-        cv::Mat crop = gray(tab.rect).clone();
-        cv::equalizeHist(crop, crop);
-
-        const int seam_strip = std::max(5, tab.big_side / 18);
-        whitenSeam(crop, tab.seam_vertical, tab.seam_pos, seam_strip);
-
-        const int border = std::max(12, std::min(crop.cols, crop.rows) / 4);
-        cv::Mat padded;
-        cv::copyMakeBorder(crop, padded, border, border, border, border,
-                           cv::BORDER_CONSTANT, cv::Scalar(255));
-
-        const int small_side_guess = std::max(1, tab.big_side / 4);
-        const double scale = small_side_guess < 40 ? 6.0
-                           : small_side_guess < 70 ? 5.0
-                           : 4.0;
-
-        cv::Mat upscaled;
-        cv::resize(padded, upscaled, cv::Size(), scale, scale, cv::INTER_CUBIC);
-
-        cv::Mat blurred, sharpened, binary, inverted;
-        cv::GaussianBlur(upscaled, blurred, cv::Size(0, 0), 1.0);
-        cv::addWeighted(upscaled, 1.8, blurred, -0.8, 0, sharpened);
-        cv::threshold(sharpened, binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-        cv::bitwise_not(binary, inverted);
-
-        for (const auto& img : {sharpened, binary, inverted}) {
-            std::vector<int> local_ids;
-            std::vector<std::vector<cv::Point2f>> local_corners, local_rejected;
-            cv::aruco::detectMarkers(
-                img, aruco_dict_, local_corners, local_ids, dp, local_rejected);
-
-            for (std::size_t i = 0; i < local_ids.size(); ++i) {
-                auto mapped = local_corners[i];
-                for (auto& pt : mapped) {
-                    pt.x = static_cast<float>((pt.x / scale) - border + tab.rect.x);
-                    pt.y = static_cast<float>((pt.y / scale) - border + tab.rect.y);
-                }
-
-                const float side = std::sqrt(std::max(1.f, markerArea(mapped)));
-                if (side > tab.big_side * 0.70f || side < tab.big_side * 0.08f) {
-                    continue;
-                }
-                if (appendUniqueMarker(corners, ids, std::move(mapped), local_ids[i])) {
-                    RCLCPP_INFO_THROTTLE(
-                        get_logger(), *get_clock(), 1000,
-                        "Small-tab rescue detected ID=%d", local_ids[i]);
-                }
-            }
-        }
-    }
-
-    for (const auto& roi : predictive_rois) {
-        cv::Mat crop = gray(roi.rect).clone();
-        cv::equalizeHist(crop, crop);
-
-        const int border = std::max(20, std::min(crop.cols, crop.rows) / 2);
-        cv::Mat padded;
-        cv::copyMakeBorder(crop, padded, border, border, border, border,
-                           cv::BORDER_CONSTANT, cv::Scalar(255));
-
-        const double scale = roi.big_side < 180 ? 7.0
-                           : roi.big_side < 280 ? 6.0
-                           : 5.0;
-        cv::Mat upscaled;
-        cv::resize(padded, upscaled, cv::Size(), scale, scale, cv::INTER_CUBIC);
-
-        cv::Mat blurred, sharpened, binary, inverted;
-        cv::GaussianBlur(upscaled, blurred, cv::Size(0, 0), 1.0);
-        cv::addWeighted(upscaled, 1.8, blurred, -0.8, 0, sharpened);
-        cv::threshold(sharpened, binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-        cv::bitwise_not(binary, inverted);
-
-        for (const auto& img : {sharpened, binary, inverted}) {
-            std::vector<int> local_ids;
-            std::vector<std::vector<cv::Point2f>> local_corners, local_rejected;
-            cv::aruco::detectMarkers(
-                img, aruco_dict_, local_corners, local_ids, dp, local_rejected);
-
-            for (std::size_t i = 0; i < local_ids.size(); ++i) {
-                auto mapped = local_corners[i];
-                for (auto& pt : mapped) {
-                    pt.x = static_cast<float>((pt.x / scale) - border + roi.rect.x);
-                    pt.y = static_cast<float>((pt.y / scale) - border + roi.rect.y);
-                }
-
-                const float side = std::sqrt(std::max(1.f, markerArea(mapped)));
-                if (side > roi.big_side * 0.50f || side < roi.big_side * 0.08f) {
-                    continue;
-                }
-                if (appendUniqueMarker(corners, ids, std::move(mapped), local_ids[i])) {
-                    RCLCPP_INFO_THROTTLE(
-                        get_logger(), *get_clock(), 1000,
-                        "Predictive small-tab detected ID=%d", local_ids[i]);
-                }
-            }
-        }
     }
 }
 
@@ -905,18 +486,11 @@ void FiducialDetector::computeConfidence(DetectionResult& result) {
 
 void FiducialDetector::stabilizeDetections(DetectionResult& result) {
     constexpr float CORNER_ALPHA = 0.55f;
-    constexpr int BIG_HOLD_FRAMES = 7;
-    constexpr int SMALL_HOLD_FRAMES = 14;
-
-    float max_area = 0.f;
-    for (const auto& marker : result.markers) {
-        max_area = std::max(max_area, markerArea(marker.corners));
-    }
-    max_area = std::max(max_area, 1.f);
+    constexpr int HOLD_FRAMES = 7;
 
     std::unordered_map<std::string, bool> seen;
     for (auto& marker : result.markers) {
-        const std::string key = trackingKey(marker, max_area);
+        const std::string key = trackingKey(marker);
         seen[key] = true;
 
         auto it = marker_tracks_.find(key);
@@ -940,16 +514,14 @@ void FiducialDetector::stabilizeDetections(DetectionResult& result) {
         }
 
         ++it->second.missed_frames;
-        const bool small_track = it->first.find(":small") != std::string::npos;
-        const int hold_frames = small_track ? SMALL_HOLD_FRAMES : BIG_HOLD_FRAMES;
-        if (it->second.missed_frames > hold_frames) {
+        if (it->second.missed_frames > HOLD_FRAMES) {
             it = marker_tracks_.erase(it);
             continue;
         }
 
         DetectedMarker held = it->second.marker;
         const float fade = 1.0f - static_cast<float>(it->second.missed_frames)
-                                 / static_cast<float>(hold_frames + 1);
+                                 / static_cast<float>(HOLD_FRAMES + 1);
         held.confidence.aggregate *= fade;
         result.markers.push_back(std::move(held));
         ++it;
@@ -1000,12 +572,19 @@ void FiducialDetector::publishAll(
     const rclcpp::Time& stamp)
 {
     logDetectedMarkers(result, gate_err);
+    const std::string frame_id = output_frame_id_.empty()
+        ? (camera_topic_.find("/camera/camera/color/") == 0
+            ? "camera_color_optical_frame"
+            : "camera")
+        : output_frame_id_;
 
-    auto img_msg = cv_bridge::CvImage(
-        std_msgs::msg::Header(), "bgr8", annotated).toImageMsg();
-    img_msg->header.stamp    = stamp;
-    img_msg->header.frame_id = "camera";
-    pub_debug_->publish(*img_msg);
+    if (publish_debug_image_ || show_window_) {
+        auto img_msg = cv_bridge::CvImage(
+            std_msgs::msg::Header(), "bgr8", annotated).toImageMsg();
+        img_msg->header.stamp    = stamp;
+        img_msg->header.frame_id = frame_id;
+        pub_debug_->publish(*img_msg);
+    }
 
     {
         auto msg   = std_msgs::msg::String();
@@ -1017,7 +596,7 @@ void FiducialDetector::publishAll(
         if (m.pose.valid) {
             auto msg = geometry_msgs::msg::PoseStamped();
             msg.header.stamp    = stamp;
-            msg.header.frame_id = "camera";
+            msg.header.frame_id = frame_id;
             msg.pose.position.x = m.pose.tvec[0];
             msg.pose.position.y = m.pose.tvec[1];
             msg.pose.position.z = m.pose.tvec[2];

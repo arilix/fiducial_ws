@@ -11,7 +11,7 @@ DictionaryManager::DictionaryManager() {
 void DictionaryManager::init7x7() {
     dict_info_.name          = "DICT_7X7_50";
     dict_info_.dict_id       = cv::aruco::DICT_7X7_50;
-    dict_info_.dict          = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_7X7_50);
+    dict_info_.dict          = fiducial_opencv_compat::getPredefinedDictionary(cv::aruco::DICT_7X7_50);
     dict_info_.marker_bits   = 7;
     dict_info_.total_markers = 50;
     dict_info_.border_bits   = 1;
@@ -22,7 +22,7 @@ cv::Ptr<cv::aruco::Dictionary> DictionaryManager::getDictionaryByName(
 {
     if (name != "DICT_7X7_50")
         throw std::invalid_argument("Only DICT_7X7_50 is supported: " + name);
-    return cv::aruco::getPredefinedDictionary(cv::aruco::DICT_7X7_50);
+    return fiducial_opencv_compat::getPredefinedDictionary(cv::aruco::DICT_7X7_50);
 }
 
 int DictionaryManager::getDictIdByName(const std::string& name) {
@@ -66,7 +66,8 @@ void DictionaryManager::printStartupValidation(const std::string& name) const {
     const std::string sep(54, '=');
     const std::string dash(54, '-');
     std::printf("\n%s\n", sep.c_str());
-    std::printf("  DICT_7X7_50 STARTUP VALIDATION\n");
+    std::printf("  DICT_7X7_50 DICTIONARY SELF-TEST\n");
+    std::printf("  Note         : not a camera detection\n");
     std::printf("%s\n", dash.c_str());
     if (name != "DICT_7X7_50") {
         std::printf("  Status : FAILED — unsupported dictionary: %s\n", name.c_str());

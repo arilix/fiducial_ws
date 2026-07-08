@@ -14,14 +14,9 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/float32.hpp>
 #include <image_transport/image_transport.hpp>
-#include <cv_bridge/cv_bridge.h>
+#include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
 #include "utils/marker_decoder.h"
-#ifdef FIDUCIAL_USE_CUDA
-  #include <opencv2/cudafilters.h>
-  #include <opencv2/cudaimgproc.h>
-  #include <opencv2/cudaarithm.h>
-#endif
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <atomic>
@@ -73,13 +68,6 @@ private:
 
     DetectionResult runDetection(const cv::Mat& frame);
     void detectAruco(const cv::Mat& gray, DetectionResult& result);
-    void splitCombinedBoard(const cv::Mat& gray,
-                            std::vector<std::vector<cv::Point2f>>& corners,
-                            std::vector<int>& ids,
-                            std::vector<std::vector<cv::Point2f>>& rejected);
-    void detectTopTabMarkers(const cv::Mat& gray,
-                             std::vector<std::vector<cv::Point2f>>& corners,
-                             std::vector<int>& ids);
     void estimatePoses(DetectionResult& result);
     void computeConfidence(DetectionResult& result);
     void stabilizeDetections(DetectionResult& result);
@@ -110,8 +98,10 @@ private:
 
     double      marker_size_{0.05};
     std::string camera_topic_{"/camera/image_raw"};
+    std::string output_frame_id_{};
     int         alignment_tolerance_{50};
     double      smoothing_alpha_{0.4};
+    double      min_detection_confidence_{0.70};
     int         max_missed_frames_{5};
     int         alignment_stable_frames_{10};
 
@@ -120,6 +110,7 @@ private:
     bool   show_corner_labels_{true};
     bool   show_orientation_arrow_{true};
     bool   show_confidence_{true};
+    bool   publish_debug_image_{true};
     bool   enable_clahe_{true};
     double clahe_clip_{2.0};
     bool   enable_sharpen_{false};
@@ -136,11 +127,8 @@ private:
     std::unique_ptr<BenchmarkRunner>        benchmark_runner_;
     std::unique_ptr<GateAlignmentEngine>    gate_alignment_;
     cv::Ptr<cv::CLAHE>                      clahe_;
-#ifdef FIDUCIAL_USE_CUDA
-    cv::Ptr<cv::cuda::CLAHE>                cuda_clahe_;
-    bool                                    cuda_ok_{false};
-#endif
-    bool                                    use_cuda_enabled_{false};
+    bool                                    use_npu_enabled_{false};
+    bool                                    npu_available_{false};
     FpsMonitor                              fps_monitor_;
 
     // Stabilisasi centroid untuk marker tergabung:
