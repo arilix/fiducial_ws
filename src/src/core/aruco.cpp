@@ -532,7 +532,17 @@ void FiducialDetector::logDetectedMarkers(
     const DetectionResult& result,
     const GateError& gate_err) const
 {
-    if (result.markers.empty()) return;
+    if (result.markers.empty()) {
+        RCLCPP_INFO_THROTTLE(
+            get_logger(), *get_clock(), 1000,
+            "[Camera] frame=%llu | size=%dx%d | no ArUco | FPS=%.1f | Lat=%.1fms",
+            static_cast<unsigned long long>(frame_count_),
+            result.frame_size.width,
+            result.frame_size.height,
+            fps_monitor_.getFps(),
+            fps_monitor_.getLatencyMs());
+        return;
+    }
     if (frame_count_ % 10 != 0) return;
 
     float  fps_now = fps_monitor_.getFps();
